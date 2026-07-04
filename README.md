@@ -1,60 +1,51 @@
-<h1 align="center">B1VS Hourglass Dapp 👋</h1>
-<p>
-    <img alt="Version" src="https://img.shields.io/badge/version-1.0.0-blue.svg?cacheSeconds=2592000" />
-    <a href="https://functionisland.net/howtoplay.html" target="_blank">
-        <img alt="Documentation" src="https://img.shields.io/badge/documentation-yes-brightgreen.svg" />
-    </a>
-    <a href="#" target="_blank">
-        <img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-yellow.svg" />
-    </a>
-    <a href="https://twitter.com/MrFUNCT1ON" target="_blank">
-        <img alt="Twitter: MrFUNCT1ON" src="https://img.shields.io/twitter/follow/MrFUNCT1ON.svg?style=social" />
-    </a>
-</p>
+# 💎 SPX6900 Diamond Hands Vault
 
-> An implementation of the Hourglass (&#34;Proof of Weak Hands&#34;) smart contract, with an accompanying Dapp, suitable for Binance Smart Chain. Also compatible or portable to ETH and similar chains.
+> *Stop trading. Believe in something. Get paid when others don't.*
 
-B1VS Hourglass is a customised implementation of the "Proof of Weak Hands" game-theory, popularly known also as the Hourglass contract, or "PoWH".
+An ERC-4626 tokenized vault for **SPX6900 ($SPX)** on **Base Network** where paper hands fund diamond hands. Every deposit and withdrawal pays a tax — the bulk flows to holders as dividends, a portion is burned to `0x...dead` forever.
 
-### 🏠 [Homepage](https://functionisland.net)
+## The Mechanic
 
-![B1VS Dapp - Homepage](https://github.com/MrFUNCT1ON/BSC-Hourglass-Dapp/blob/main/screenshots/image_1.png)
+| Action | Tax | → Dividends | → Burn |
+|---|---|---|---|
+| **Deposit** | 5% | 3% to all holders | 2% burned |
+| **Withdraw** | 10% | 8% to all holders | 2% burned |
 
-To use the B1VS Hourglass Dapp, you will need a wallet extension such as MetaMask, and the correct settings to connect to the Binance Smart Chain. [Here's a link](https://academy.binance.com/en/articles/connecting-metamask-to-binance-smart-chain) with details on how to configure MetaMask with those settings.
+The longer you hold, the more dividends you accrue from every paper-hand exit. Every burn adds to the eternal 6.9% already at the dead address. Zero dev fee. Zero team allocation. Zero governance.
 
-### ✨ [Demo](https://functionisland.net/dashboard.html)
+## Architecture
 
-![B1VS Dapp - Dashboard](https://github.com/MrFUNCT1ON/BSC-Hourglass-Dapp/blob/main/screenshots/image_2.png)
+- **ERC-4626** (OpenZeppelin v5) — battle-tested tokenized vault standard
+- **ERC-1726** dividend math — proven across billions in TVL
+- **SafeERC20** — safe SPX token handling
+- **ReentrancyGuard + Pausable** — security primitives
+- **Ownable2Step** — deploy, verify, renounce
 
-Perhaps the most interesting fact of the B1VS Hourglass is its ability to act as both a game and a system of passive income. As people buy, sell and transfer their B1VS shares between addresses, you will earn BNB dividends (proportionate to your holding percentage of the B1VS supply). In this way, you could earn a passive income stream while others attempt to play the market factors of the B1VS Hourglass contract.
+```
+SPXDiamondHandsVault
+├── ERC4626              (vault deposit/redeem/share math)
+├── DividendPayingToken  (ERC-1726 per-share dividend accrual)
+├── ReentrancyGuard      (reentrancy protection)
+├── Pausable             (emergency stop)
+└── Ownable2Step         (safe renunciation at launch)
+```
 
-Alternatively, you could try to buy low and sell high with B1VS shares - the price rises incrementally with every B1VS share bought, and decreases incrementally with every one sold! The choice is yours, and everyone is free to sell all their B1VS and withdraw BNB from the Hourglass contract at any time.
+## Contracts
 
-## Important Information
+| Token | Chain | Address |
+|---|---|---|
+| SPX6900 | Ethereum | `0xE0f63A424a4439cBE457D80E4f4b51aD25b2c56C` |
+| SPX6900 | **Base** | `0x50dA645f148798F68EF2d7dB7C1CB22A6819bb2C` |
+| Vault | Base | *(deploy pending v0.6.9)* |
 
-### ➡ Using this Interface
+## Origin
 
-This web-based interface for B1VS Hourglass carries the ability to handle referral addresses in calls to the `purchaseTokens()` function. If no referrer address is detected after `/dashboard.html?ref=`, the donation address is set as the referrer.
+Forked from [BSC-Hourglass-Dapp](https://github.com/safestartprotocol/BSC-Hourglass-Dapp) (the "Proof of Weak Hands" / Hourglass pattern). The original contract logic is being rewritten from a native-coin bonding curve into an ERC-20 tokenized vault with modern OpenZeppelin security primitives.
 
-### ➡ Contract Notes
- - The Hourglass contract has the donation address set as the referrer for all `reinvest()` calls.
- - Every Gauntlets contract has the donation address set as the referrer.
+## ⚠️ Risk Disclosure
 
-## Author
+This is a **zero-sum game** by design. Payouts to diamond hands come from paper hands' exit taxes — not from external yield. You can lose SPX. The contract will be renounced at launch. No team. No roadmap. No expectation of financial return. Entertainment purposes only.
 
-### 👤 **Function Island**
+## License
 
-* Website: https://functionisland.com/about.html
-* Twitter: [@FunctionIsland](https://twitter.com/FunctionIsland)
-* Github: [@FunctionIsland](https://github.com/FunctionIsland)
-
-## Show your support
-
-Give a ⭐️ if this project helped you!
-
-### DONATE TO THE DEVS:
-<p align="center">
-    <img src="https://chart.googleapis.com/chart?chs=350x350&amp;cht=qr&amp;chl=0xf2C579082fE10d57331d0Cd66843C4D6777eA48a&amp;choe=UTF-8" /><br />
-    <b>0xf2C579082fE10d57331d0Cd66843C4D6777eA48a</b><br />
-    <em>Binance Smart Chain (BEP-20)</em>
-</p>
+MIT
