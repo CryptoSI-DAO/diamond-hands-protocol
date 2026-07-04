@@ -42,6 +42,12 @@ SPXDiamondHandsVault
 
 Forked from [BSC-Hourglass-Dapp](https://github.com/safestartprotocol/BSC-Hourglass-Dapp) (the "Proof of Weak Hands" / Hourglass pattern). The original contract logic is being rewritten from a native-coin bonding curve into an ERC-20 tokenized vault with modern OpenZeppelin security primitives.
 
+## Frontend
+
+The dApp frontend lives in a separate repo: [`CryptoSI-DAO/spx-diamond-hands-ui`](https://github.com/CryptoSI-DAO/spx-diamond-hands-ui)
+
+This repo stays compact and audit-friendly — contracts, tests, deploy scripts, and the subgraph. The frontend imports the ABI and deployed addresses from here.
+
 ## ⚠️ Risk Disclosure
 
 This is a **zero-sum game** by design. Payouts to diamond hands come from paper hands' exit taxes — not from external yield. You can lose SPX. The contract will be renounced at launch. No team. No roadmap. No expectation of financial return. Entertainment purposes only.
