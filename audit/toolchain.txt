@@ -1,0 +1,8 @@
+=== System info ===
+OS: Linux vmi2595069 6.8.0-111-generic #111-Ubuntu SMP PREEMPT_DYNAMIC Sat Apr 11 23:16:02 UTC 2026 x86_64 x86_64 x86_64 GNU/Linux
+Date: Sun Jul 12 08:40:58 UTC 2026
+Commit: f44fb13db0a94f63a06732ac8b6ec8156e93ede4
+
+=== solc versions ===
+1_Hourglass.sol pragma: solidity 0.6.12
+2_Gauntlets.sol pragma: solidity ^0.4.25
