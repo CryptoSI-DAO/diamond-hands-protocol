@@ -1,0 +1,8 @@
+Unable to find image 'ethereum/solc:0.6.12' locally
+0.6.12: Pulling from ethereum/solc
+599b93db41ef: Pulling fs layer
+599b93db41ef: Download complete
+599b93db41ef: Pull complete
+Digest: sha256:78af473cce0fdcb2408537f97c6299646ebf8f643bc35ccf1e01acebf163bb86
+Status: Downloaded newer image for ethereum/solc:0.6.12
+unrecognised option '--contracts'
