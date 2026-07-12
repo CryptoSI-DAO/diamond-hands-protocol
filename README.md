@@ -83,6 +83,17 @@ The inaugural vault — deployed for [SPX6900 ($SPX)](https://www.spx6900.com) o
 
 Forked from [BSC-Hourglass-Dapp](https://github.com/safestartprotocol/BSC-Hourglass-Dapp) (the "Proof of Weak Hands" / Hourglass pattern). The original native-coin bonding curve has been rewritten as an ERC-4626 tokenized vault with modern OpenZeppelin security primitives, dividend distribution, and a permissionless factory.
 
+## ⚠️ Known Technical Debt
+
+The contracts in this repo are legacy code from the original fork. These items must be addressed before any production deployment. Tracked as part of the pre-launch audit ([#8](https://github.com/CryptoSI-DAO/diamond-hands-protocol/issues/8)).
+
+1. **Two Solidity versions** — `1_Hourglass.sol` is 0.6.12, `2_Gauntlets.sol` is 0.4.25. Both should be unified (target: 0.8.24+).
+2. **Hardcoded BSC addresses** — `Gauntlet` references a hardcoded Hourglass address (`0x0c22…12D3`) and developer address (`0xf2C5…a48a`) from the original BSC deployment. These must be parameterized for Base.
+3. **No overflow protection in Gauntlet** — `extendLock()` does `unlockAfterNDays + _howManyDays` with no SafeMath. Fixed automatically by upgrading to 0.8+ (built-in overflow reverts).
+4. **Deprecated `now` keyword** — `Gauntlet` uses `now` (alias for `block.timestamp`), deprecated since 0.7. Fixed automatically by upgrading to 0.8+.
+5. **`.transfer()` gas stipend** — Both contracts use `.transfer()` (2300 gas). Will revert if the recipient is a contract with expensive receive logic. Replace with `.call()` + explicit reentrancy guard.
+6. **No test suite** — Zero tests, no build framework. Unit tests ([#4](https://github.com/CryptoSI-DAO/diamond-hands-protocol/issues/4)) and fuzz/invariant tests ([#5](https://github.com/CryptoSI-DAO/diamond-hands-protocol/issues/5)) are tracked separately.
+
 ## ⚠️ Risk Disclosure
 
 Every Diamond Hands Vault is a **zero-sum game** by design. Payouts to diamond hands come from paper hands' taxes — not from external yield. Users can lose tokens. All vaults are renounced at launch. No team. No roadmap. No expectation of financial return. Entertainment purposes only.
