@@ -1,0 +1,520 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.28;
+
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
+import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
+import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+
+import {IDHPVault} from "../interfaces/IDHPVault.sol";
+
+/// @title  DHPImplementation
+/// @notice Implementation contract for a single Diamond Hands Vault clone.
+/// @dev    Deployed ONCE on Base (and replicated on testnet/mainnet clones);
+///         each user-facing vault is an EIP-1167 minimal proxy over this
+///         contract, initialised with one specific underlying ERC-20.
+///
+///         Per-vault economic model:
+///         - Entry tax `entryTaxBps` on deposit. Split into:
+///             • `dividendShareBps` of the tax → pro-rata dividend pool
+///             • 0.5% protocol fee → `feeCollector`
+///             • Remainder → `0x…dEaD` (burned forever)
+///         - Exit tax `exitTaxBps` on withdraw — same split.
+///         - Dividends accrue via Synthetix StakingRewards math:
+///             `rewardPerTokenStored` ticks up by
+///               `(dividendAmount * 1e18) / totalSupply`
+///             on every tax event. Users claim via `claimDividend()` which
+///             pays pending in the underlying token (not shares).
+///         - Anti-FOT: deposits/withdrawals verify that the actual `balanceOf`
+///           delta equals the expected pre-tax amount. Tokens with
+///           fee-on-transfer, rebasing, or transfer hooks cannot pass.
+///         - No admin functions on the vault. The factory is `Ownable` and
+///           gets renounced post-launch. `Pausable` is exposed but only the
+///           factory owner can pause/unpause; after factory renounce, the
+///           pause capability becomes inert.
+///
+///         Share accounting follows the standard ERC-4626 formula, but the
+///         deposit/withdraw entry-points apply tax first and then mint/burn
+///         shares off the net amount. We intentionally do NOT inherit ERC4626
+///         directly because OZ v5 makes the underlying immutable at deploy
+///         time, which doesn't fit our per-token-clone model.
+contract DHPImplementation is ERC20, ReentrancyGuardTransient, Pausable, Ownable, IDHPVault {
+    using SafeERC20 for IERC20;
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // Constants
+    // ──────────────────────────────────────────────────────────────────────────
+
+    uint16 internal constant BPS = 10_000;
+    uint16 internal constant MAX_ENTRY_TAX_BPS = 1_000;  // 10%
+    uint16 internal constant MAX_EXIT_TAX_BPS = 2_500;   // 25%
+    uint16 internal constant PROTOCOL_FEE_BPS = 50;      // 0.5%
+    uint16 internal constant MAX_DIVIDEND_SHARE_BPS = 9_000; // 90%
+
+    address internal constant BURN_SINK = 0x000000000000000000000000000000000000dEaD;
+
+    uint256 internal constant PRECISION = 1e18;
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // Events (declared in IDHPVault; redeclared here so internal emit sites compile)
+    // ──────────────────────────────────────────────────────────────────────────
+
+    // Note: events are also declared in IDHPVault.sol. Solidity forbids declaring
+    // the same event in both the interface and the implementing contract, so we
+    // rely on the interface to provide them; internal call sites work because
+    // the contract inherits the interface and inherits the events with it.
+
+    /// @dev ERC-4626-compatible events re-declared here because the interface
+    //      events above don't reach into this contract's name resolution
+    //      chain. Solidity complains about dual declarations only when they
+    //      match identically; we use distinct (less specific) signatures here.
+    event Deposit(address sender, address owner, uint256 assets, uint256 shares);
+    event Withdraw(address sender, address receiver, address owner, uint256 assets, uint256 shares);
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // Storage
+    // ──────────────────────────────────────────────────────────────────────────
+
+    /// @inheritdoc IDHPVault
+    address public override factory;
+
+    /// @inheritdoc IDHPVault
+    address public override feeCollector;
+
+    /// @inheritdoc IDHPVault
+    uint16 public override entryTaxBps;
+
+    /// @inheritdoc IDHPVault
+    uint16 public override exitTaxBps;
+
+    /// @inheritdoc IDHPVault
+    uint16 public override dividendShareBps;
+
+    /// @inheritdoc IDHPVault
+    uint256 public override rewardPerTokenStored;
+
+    /// @inheritdoc IDHPVault
+    uint256 public override totalDividendsDistributed;
+
+    /// @inheritdoc IDHPVault
+    mapping(address account => uint256) public override rewardPerTokenPaid;
+
+    /// @inheritdoc IDHPVault
+    mapping(address account => uint256) public override rewards;
+
+    /// @dev The underlying token this vault wraps. Set in `initialize()`.
+    IERC20 internal _assetToken;
+
+    /// @dev Initialised flag — guards against re-initialisation of a clone.
+    bool private _vaultInitialised;
+
+    /// @dev Per-clone ERC-20 metadata. Read by the `name()` / `symbol()`
+    ///      overrides below. Stored in this contract (not the OZ base)
+    ///      because OZ v5 makes the equivalent fields `private`.
+    string private _vaultName;
+    string private _vaultSymbol;
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // Errors
+    // ──────────────────────────────────────────────────────────────────────────
+
+    error OnlyFactory();
+    error AlreadyInitialised();
+    error InvalidBpsConfiguration();
+    error FeeOnTransferToken();
+    error ZeroAddress();
+    error ZeroAmount();
+    error NoPendingDividend();
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // Modifiers
+    // ──────────────────────────────────────────────────────────────────────────
+
+    modifier onlyFactory() {
+        if (msg.sender != factory) revert OnlyFactory();
+        _;
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // Constructor (implementation-only, no functional state)
+    // ──────────────────────────────────────────────────────────────────────────
+
+    /// @dev The implementation's own constructor never sees real token state
+    ///      — it is only used as init-code for clones. Clones bypass the
+    ///      constructor via delegatecall; their configuration is set in
+    ///      `initialize()` below.
+    constructor() ERC20("Diamond Hands Implementation", "DHPi") Ownable(msg.sender) {}
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // Initialisation
+    // ──────────────────────────────────────────────────────────────────────────
+
+    /// @notice One-shot initialisation called by DHPFactory on a fresh clone.
+    function initialize(
+        IERC20 token_,
+        address feeCollector_,
+        uint16 entryTaxBps_,
+        uint16 exitTaxBps_,
+        uint16 dividendShareBps_
+    ) external {
+        if (_vaultInitialised) revert AlreadyInitialised();
+        if (address(token_) == address(0) || feeCollector_ == address(0)) revert ZeroAddress();
+        if (entryTaxBps_ > MAX_ENTRY_TAX_BPS) revert InvalidBpsConfiguration();
+        if (exitTaxBps_ > MAX_EXIT_TAX_BPS) revert InvalidBpsConfiguration();
+        if (dividendShareBps_ + PROTOCOL_FEE_BPS > BPS) revert InvalidBpsConfiguration();
+
+        _vaultInitialised = true;
+        factory = msg.sender;
+        feeCollector = feeCollector_;
+        entryTaxBps = entryTaxBps_;
+        exitTaxBps = exitTaxBps_;
+        dividendShareBps = dividendShareBps_;
+        _assetToken = token_;
+
+        // Build vault-specific ERC-20 metadata (name + symbol).
+        string memory underlyingSym = IERC20Metadata(address(token_)).symbol();
+        _vaultName = string.concat("Diamond Hands ", underlyingSym);
+        _vaultSymbol = string.concat("dh", underlyingSym);
+
+        emit VaultInitialised(address(token_), entryTaxBps_, exitTaxBps_, dividendShareBps_);
+    }
+
+    /// @inheritdoc IDHPVault
+    function asset() public view override returns (IERC20) {
+        return _assetToken;
+    }
+
+    /// @inheritdoc IDHPVault
+    function totalAssetsAfterTax() external view override returns (uint256) {
+        return _assetToken.balanceOf(address(this));
+    }
+
+    /// @notice Vault name = "Diamond Hands {UNDERLYING_SYMBOL}".
+    /// @dev    Override of OZ v5 ERC20.name(). The base `_name` storage is
+    ///         unreachable (private), so we mirror it here.
+    function name() public view virtual override returns (string memory) {
+        return _vaultName;
+    }
+
+    /// @notice Vault symbol = "dh{UNDERLYING_SYMBOL}".
+    function symbol() public view virtual override returns (string memory) {
+        return _vaultSymbol;
+    }
+
+    /// @notice Total assets currently managed by the vault.
+    /// @dev    For the per-vault case this equals the underlying token balance
+    ///         (tax inflows minus withdrawals; burned tokens leave the vault
+    ///         but never come back).
+    function totalAssets() public view returns (uint256) {
+        return _assetToken.balanceOf(address(this));
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // ERC-4626 share accounting (re-implemented; not inherited)
+    // ──────────────────────────────────────────────────────────────────────────
+
+    /// @dev Convert assets → shares, taking entry tax into account.
+    ///      `assets` is the gross deposit amount. Net assets entering the
+    ///      vault (post-tax) are minted 1:1 to shares on first deposit;
+    ///      subsequent deposits use the running exchange rate.
+    function _convertToShares(uint256 netAssets, bool roundingUp) internal view returns (uint256) {
+        uint256 supply = totalSupply();
+        uint256 assets = totalAssets();
+        if (supply == 0 || assets == 0) return netAssets;
+        uint256 numerator = netAssets * supply;
+        uint256 quotient = numerator / assets;
+        if (roundingUp && numerator % assets > 0) quotient += 1;
+        return quotient;
+    }
+
+    /// @dev Convert shares → net assets that would be withdrawn.
+    function _convertToAssets(uint256 shares, bool roundingUp) internal view returns (uint256) {
+        uint256 supply = totalSupply();
+        uint256 assets = totalAssets();
+        if (supply == 0 || assets == 0) return shares;
+        uint256 numerator = shares * assets;
+        uint256 quotient = numerator / supply;
+        if (roundingUp && numerator % supply > 0) quotient += 1;
+        return quotient;
+    }
+
+    /// @inheritdoc IDHPVault
+    function previewDeposit(uint256 assets) public view override returns (uint256) {
+        uint256 tax = (assets * entryTaxBps) / BPS;
+        uint256 net = assets - tax;
+        return _convertToShares(net, /*roundingUp=*/ false);
+    }
+
+    /// @inheritdoc IDHPVault
+    function previewMint(uint256 shares) public view override returns (uint256) {
+        // Gross assets needed to mint `shares` after-tax = shares + tax portion.
+        // Solve: shares = (assets - tax_assets) * supply / totalAssets
+        //       tax = assets * entryTaxBps / BPS
+        // → shares * totalAssets = (assets * (BPS - entryTaxBps) / BPS) * supply
+        // → assets = shares * totalAssets * BPS / (supply * (BPS - entryTaxBps))
+        uint256 supply = totalSupply();
+        if (supply == 0) return shares; // 1:1 on first deposit
+        uint256 taxMultiplier = BPS - entryTaxBps;
+        return Math.mulDiv(shares * totalAssets(), BPS, supply * taxMultiplier, Math.Rounding.Ceil);
+    }
+
+    /// @inheritdoc IDHPVault
+    function previewWithdraw(uint256 assets) public view override returns (uint256) {
+        // shares burned to deliver `assets` to the user post-tax.
+        // assets_net = (shares_burned / totalSupply) * totalAssets * (BPS - exitTaxBps)/BPS
+        uint256 supply = totalSupply();
+        if (supply == 0) return assets;
+        uint256 keepMultiplier = BPS - exitTaxBps;
+        return Math.mulDiv(assets * supply, BPS, totalAssets() * keepMultiplier, Math.Rounding.Ceil);
+    }
+
+    /// @inheritdoc IDHPVault
+    function previewRedeem(uint256 shares) public view override returns (uint256) {
+        uint256 netAssets = _convertToAssets(shares, /*roundingUp=*/ false);
+        uint256 taxOnNet = (netAssets * exitTaxBps) / BPS;
+        return netAssets - taxOnNet;
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // Deposit / Mint
+    // ──────────────────────────────────────────────────────────────────────────
+
+    /// @inheritdoc IDHPVault
+    function deposit(uint256 assets, address receiver)
+        public
+        override
+        nonReentrant
+        whenNotPaused
+        returns (uint256 shares)
+    {
+        if (assets == 0) revert ZeroAmount();
+        if (receiver == address(0)) revert ZeroAddress();
+
+        uint256 tax = (assets * entryTaxBps) / BPS;
+        uint256 net = assets - tax;
+
+        // Anti-FOT: pull the full `assets` from the user, then verify the
+        // vault received exactly `assets`. Anything less means the token
+        // deducted a fee and we revert.
+        uint256 preBal = _assetToken.balanceOf(address(this));
+        _assetToken.safeTransferFrom(msg.sender, address(this), assets);
+        uint256 postBal = _assetToken.balanceOf(address(this));
+        if (postBal - preBal != assets) revert FeeOnTransferToken();
+
+        // Dividend accounting: update pool before mutating shares.
+        _accrueDividend(tax);
+
+        shares = _convertToShares(net, /*roundingUp=*/ false);
+        if (shares == 0) revert ZeroAmount();
+        _mint(receiver, shares);
+
+        // Distribute the tax (must happen AFTER dividend accrual but doesn't
+        // affect balance math since dividends are bookkeeping only).
+        _distributeTax(tax);
+
+        emit Deposit(msg.sender, receiver, assets, shares);
+    }
+
+    /// @inheritdoc IDHPVault
+    function mint(uint256 shares, address receiver)
+        public
+        override
+        nonReentrant
+        whenNotPaused
+        returns (uint256 assets)
+    {
+        if (shares == 0) revert ZeroAmount();
+        if (receiver == address(0)) revert ZeroAddress();
+
+        assets = previewMint(shares);
+        uint256 tax = (assets * entryTaxBps) / BPS;
+
+        uint256 preBal = _assetToken.balanceOf(address(this));
+        _assetToken.safeTransferFrom(msg.sender, address(this), assets);
+        uint256 postBal = _assetToken.balanceOf(address(this));
+        if (postBal - preBal != assets) revert FeeOnTransferToken();
+
+        _accrueDividend(tax);
+        _mint(receiver, shares);
+        _distributeTax(tax);
+
+        emit Deposit(msg.sender, receiver, assets, shares);
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // Withdraw / Redeem
+    // ──────────────────────────────────────────────────────────────────────────
+
+    /// @inheritdoc IDHPVault
+    function withdraw(uint256 assets, address receiver, address owner_)
+        public
+        override
+        nonReentrant
+        returns (uint256 shares)
+    {
+        if (assets == 0) revert ZeroAmount();
+        if (receiver == address(0) || owner_ == address(0)) revert ZeroAddress();
+
+        // Settle owner's pending dividends before burning their shares.
+        _settleDividend(owner_);
+
+        shares = previewWithdraw(assets);
+
+        // Compute the gross tax. Withdraw semantics: user wants `assets` net
+        // in hand; the tax is paid on top by burning extra shares from `owner_`.
+        // Solve: shares_to_burn = shares (above), of which `assets` is the net.
+        // The total vault-side value burned = shares_to_burn * totalAssets() / supply.
+        // The gross on which tax is charged = (shares * totalAssets() / supply) - assets.
+        uint256 grossBurnedValue = Math.mulDiv(shares, totalAssets(), totalSupply(), Math.Rounding.Ceil);
+        uint256 tax = grossBurnedValue - assets;
+
+        // Allowance check.
+        if (msg.sender != owner_) {
+            _spendAllowance(owner_, msg.sender, shares);
+        }
+
+        _burn(owner_, shares);
+
+        // Update dividend index with the tax contribution.
+        _accrueDividend(tax);
+
+        // Send the net to the user. Anti-FOT: confirm the user received `assets`.
+        uint256 preBal = _assetToken.balanceOf(receiver);
+        _assetToken.safeTransfer(receiver, assets);
+        uint256 postBal = _assetToken.balanceOf(receiver);
+        if (postBal - preBal != assets) revert FeeOnTransferToken();
+
+        _distributeTax(tax);
+
+        emit Withdraw(msg.sender, receiver, owner_, assets, shares);
+    }
+
+    /// @inheritdoc IDHPVault
+    function redeem(uint256 shares, address receiver, address owner_)
+        public
+        override
+        nonReentrant
+        returns (uint256 assets)
+    {
+        if (shares == 0) revert ZeroAmount();
+        if (receiver == address(0) || owner_ == address(0)) revert ZeroAddress();
+
+        _settleDividend(owner_);
+
+        if (msg.sender != owner_) {
+            _spendAllowance(owner_, msg.sender, shares);
+        }
+
+        uint256 grossValue = _convertToAssets(shares, /*roundingUp=*/ true);
+        uint256 tax = (grossValue * exitTaxBps) / BPS;
+        assets = grossValue - tax;
+
+        _burn(owner_, shares);
+        _accrueDividend(tax);
+
+        uint256 preBal = _assetToken.balanceOf(receiver);
+        _assetToken.safeTransfer(receiver, assets);
+        uint256 postBal = _assetToken.balanceOf(receiver);
+        if (postBal - preBal != assets) revert FeeOnTransferToken();
+
+        _distributeTax(tax);
+
+        emit Withdraw(msg.sender, receiver, owner_, assets, shares);
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // Dividend math (Synthetix StakingRewards pattern)
+    // ──────────────────────────────────────────────────────────────────────────
+
+    /// @dev Settle a user's pending dividends into their `rewards` balance.
+    ///      Called automatically before any share-changing operation.
+    function _settleDividend(address account) internal {
+        uint256 paid = rewardPerTokenPaid[account];
+        uint256 current = rewardPerTokenStored;
+        uint256 bal = balanceOf(account);
+        if (bal > 0) {
+            uint256 accrued = Math.mulDiv(bal, current - paid, PRECISION);
+            rewards[account] += accrued;
+        }
+        rewardPerTokenPaid[account] = current;
+    }
+
+    /// @dev Bump `rewardPerTokenStored` by `taxAmount * 1e18 / totalSupply`.
+    ///      Called immediately after every deposit/withdraw that took tax.
+    function _accrueDividend(uint256 taxAmount) internal {
+        uint256 dividendPortion = (taxAmount * dividendShareBps) / BPS;
+        uint256 supply = totalSupply();
+        if (supply > 0 && dividendPortion > 0) {
+            rewardPerTokenStored += Math.mulDiv(dividendPortion, PRECISION, supply);
+            totalDividendsDistributed += dividendPortion;
+        }
+    }
+
+    /// @dev Send the dividend portion, the burn portion, and the protocol fee
+    ///      to their respective sinks.
+    function _distributeTax(uint256 taxAmount) internal {
+        uint256 dividendPortion = (taxAmount * dividendShareBps) / BPS;
+        uint256 protocolPortion = (taxAmount * PROTOCOL_FEE_BPS) / BPS;
+        uint256 burnPortion = taxAmount - dividendPortion - protocolPortion;
+
+        if (protocolPortion > 0) {
+            _assetToken.safeTransfer(feeCollector, protocolPortion);
+        }
+        if (burnPortion > 0) {
+            _assetToken.safeTransfer(BURN_SINK, burnPortion);
+            emit TokensBurned(burnPortion);
+        }
+        // dividendPortion STAYS in the vault — it backs the dividend pool.
+        emit TaxCollected(0, taxAmount, dividendPortion, burnPortion, protocolPortion);
+    }
+
+    /// @inheritdoc IDHPVault
+    function claimDividend() external override nonReentrant returns (uint256 amount) {
+        _settleDividend(msg.sender);
+        amount = rewards[msg.sender];
+        if (amount == 0) revert NoPendingDividend();
+        rewards[msg.sender] = 0;
+        uint256 preBal = _assetToken.balanceOf(msg.sender);
+        _assetToken.safeTransfer(msg.sender, amount);
+        uint256 postBal = _assetToken.balanceOf(msg.sender);
+        if (postBal - preBal != amount) revert FeeOnTransferToken();
+        emit DividendClaimed(msg.sender, amount);
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // Pausable (only factory owner, post-renounce inert)
+    // ──────────────────────────────────────────────────────────────────────────
+
+    function pause() external onlyFactory {
+        _pause();
+    }
+
+    function unpause() external onlyFactory {
+        _unpause();
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // ERC-20 overrides — update dividend accounting on every transfer
+    // ──────────────────────────────────────────────────────────────────────────
+
+    /// @dev Hook into ERC-20 transfers to settle dividends for both parties.
+    function _update(address from, address to, uint256 value)
+        internal
+        override
+    {
+        // Settle the dividend index for both sender and receiver. This is the
+        // standard StakingRewards pattern: every balance mutation updates the
+        // snapshot so the pro-rata math stays correct.
+        if (from != address(0)) _settleDividend(from);
+        if (to != address(0)) _settleDividend(to);
+        super._update(from, to, value);
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // Reentrancy guard disables all view methods from writing — nothing here.
+    // ──────────────────────────────────────────────────────────────────────────
+}
