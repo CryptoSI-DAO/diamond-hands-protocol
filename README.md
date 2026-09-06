@@ -1,92 +1,152 @@
-# 💎 Diamond Hands Protocol (DHP)
+# Diamond Hands Protocol (DHP) 💎
 
 > *Paper hands fund diamond hands. On-chain. Forever.*
 
 A permissionless vault factory on **Base Network**. Any community can deploy a Diamond Hands Vault for their token — where every deposit and withdrawal pays a tax that flows to holders as dividends and burns tokens forever. The longer you hold, the more you earn from those who don't.
 
-## Architecture
+---
+
+## 📍 Live deployments
+
+| Network | Contract | Address | Verified |
+|---|---|---|---|
+| **Base Sepolia (testnet)** | DHPImplementation | [`0x562e…95f0f`](https://base-sepolia.blockscout.com/address/0x562e4ECa55ccA4Bb411a81f2605F992C00395f0f) | ✅ Sourcify exact_match |
+| **Base Sepolia (testnet)** | DHPFeeCollector | [`0x11F4…D87C`](https://base-sepolia.blockscout.com/address/0x11F41D72E8e612b94b831Df38B12F5Bc3D58D87C) | ✅ Sourcify exact_match |
+| **Base Sepolia (testnet)** | DHPFactory | [`0xee1e…1273F`](https://base-sepolia.blockscout.com/address/0xee1e2343E513736f29ceeF24071B63874661273F) | ✅ Sourcify exact_match |
+
+**Mainnet: not yet deployed.** Awaiting audit + DAO multisig setup on Base.
+
+---
+
+## 🏗️ Architecture
 
 ```
-DHPFactory (Base, permissionless, renounced)
-├── createVault(token, taxConfig) → deploys DHPVault
-├── getVault(token) → vault address (1 token = 1 vault)
-├── allVaults() → registry of every deployed vault
-├── setVerified(token) → frontend curation (DAO-gated)
-└── feeRecipient → CryptoSI DAO multisig (Base)
-
-DHPVault (one per token, each renounced individually)
-├── ERC-4626 tokenized vault (OpenZeppelin v5)
-├── ERC-1726 dividend distribution
-├── Tax: entry X% / exit Y% → dividends + burn + 0.5% protocol fee
-└── Fully autonomous after renunciation
-
-DHPFeeCollector (Base)
-├── Accumulates protocol fees from all vaults
-└── Routes to CryptoSI DAO treasury
+DHPImplementation   (immutable logic, deployed ONCE)
+        ↓ EIP-1167 clone
+DHPFactory           (clone-deploys a vault per token)
+        ↓
+DHPVault (clone)     (one per ERC-20 token — what users interact with)
+        ↓ 0.5% protocol fee
+DHPFeeCollector      (per-token fee aggregation, sweep to DAO treasury)
 ```
 
-## How the tax works
+### Per-vault economic model
 
-Every vault has configurable tax rates (set at creation, enforced by factory bounds):
+- **Entry tax** `entryTaxBps` charged on every deposit. Split:
+  - `dividendShareBps` of tax → pro-rata dividend pool (stays in vault)
+  - 0.5% of tax → `DHPFeeCollector`
+  - Remainder → `0x…dEaD` (burned forever)
+- **Exit tax** `exitTaxBps` charged on every withdraw — same split.
+- **Dividends** accrue continuously via Synthetix StakingRewards math:
+  `rewardPerTokenStored` ticks up by `(dividendAmount × 1e18) / totalSupply` on every tax event. Users claim via `claimDividend()` which pays their pending balance in the underlying token (not shares).
+- **Zero admin functions** on individual vaults. The factory is `Ownable2Step` (intended to be renounced post-launch). `Pausable` is exposed but only the factory owner can pause; after factory renounce, the pause capability becomes inert.
 
-| Tax event | Split example | Notes |
-|---|---|---|
-| **Deposit** | e.g. 5% → 3% dividends + 1.5% burn + 0.5% protocol | Entry tax ≤ 10% |
-| **Withdraw** | e.g. 10% → 8% dividends + 1.5% burn + 0.5% protocol | Exit tax ≤ 25% |
+### Anti–fee-on-transfer
 
-- **Dividends** distribute proportionally to all vault shareholders (DIAMOND tokens)
-- **Burn** sends tokens to `0x000000000000000000000000000000000000dead` — forever
-- **Protocol fee** (0.5%) routes to the CryptoSI DAO treasury via the fee collector
+Every deposit/withdrawal verifies that the actual `balanceOf(this)` delta equals the expected pre-tax amount. Tokens with fee-on-transfer, rebasing, or transfer hooks cannot pass this gate and revert with `FeeOnTransferToken()`.
 
-Zero dev fee. Zero team allocation. Zero governance on individual vaults. Each vault is renounced at deployment — fully autonomous.
+### Eligibility gate (factory-side)
 
-## Protocol model
+Before a vault can be created for a token, the factory checks:
+1. **Token must expose `decimals()` returning 0–18.**
+2. **Token must not already have a vault.**
 
-- **Permissionless factory**: Anyone can deploy a vault for any standard ERC-20 on Base
-- **Curated frontend**: The official DHP frontend shows "verified" vaults that meet quality criteria
-- **Open ecosystem**: Alternative frontends can read the factory registry — the protocol is neutral infrastructure
-- **Factory-bounded configs**: Tax rates, splits, and token validation enforced on-chain
+Off-chain checks (the frontend or factory helper script should verify before calling `createVault`):
+1. GoPlus honeypot check passes (`buy_tax=0`, `sell_tax=0`, `cannot_buy=0`).
+2. Sufficient Uniswap V3 liquidity on Base (default ≥ $5,000).
+3. Minimum holder count (default ≥ 100).
+4. Source verified on Basescan.
 
-## Token eligibility (enforced by factory)
+---
 
-- ✅ Standard ERC-20 (no fee-on-transfer, no rebasing, no tx limits)
-- ✅ Verified source on Basescan
-- ✅ Minimum liquidity threshold
-- ✅ Minimum holder count
-- ❌ Honeypots (sell simulation check at creation)
+## 🔢 Tax config bounds (immutable after factory deploy)
 
-## First vault: SPX6900
+| Bound | Value |
+|---|---|
+| `entryTaxBps` | ≤ 1_000 (10%) |
+| `exitTaxBps` | ≤ 2_500 (25%) |
+| `dividendShareBps` | ≤ 9_000 (90%) |
+| `dividendShareBps + 50` (protocol fee) | ≤ 10_000 (100%) |
 
-The inaugural vault — deployed for [SPX6900 ($SPX)](https://www.spx6900.com) on Base. SPX has 6.9% of supply already burned (69,007,090 SPX at the dead address). The DHP vault adds continuous burn pressure that SPX currently doesn't have.
+---
 
-| Token | Chain | Address |
-|---|---|---|
-| SPX6900 | Base | `0x50dA645f148798F68EF2d7dB7C1CB22A6819bb2C` |
-| SPX6900 | Ethereum | `0xE0f63A424a4439cBE457D80E4f4b51aD25b2c56C` |
+## 🧪 Tests
 
-## Repositories
+54 tests, all passing:
+
+```
+$ forge test
+…
+Ran 3 test suites in 8.92ms (9.09ms CPU time): 54 tests passed, 0 failed, 0 skipped (54 total tests)
+```
+
+Coverage spans:
+- 15 `DHPImplementationTest` — deposit/withdraw/redeem/dividend math/anti-FOT/pause/edge cases
+- 20 `DHPFactoryTest` — clone deploy/eligibility gate/Ownable2Step/Verified flag/decimal bounds
+- 19 `DHPFeeCollectorTest` — sweep/per-token overrides/native ETH/owner admin/zero-balance guards
+
+---
+
+## 🛠️ Development
+
+```bash
+git clone --branch feat/v1-core-contracts https://github.com/CryptoSI-DAO/diamond-hands-protocol
+cd diamond-hands-protocol
+forge install
+forge test
+```
+
+### Deploy to Base Sepolia
+
+```bash
+cp .env.example .env
+# Fill in PRIVATE_KEY and DAO_TREASURY_BASE_SEPOLIA
+source .env
+forge script script/Deploy.s.sol:DeployScript --rpc-url $BASE_SEPOLIA_RPC_URL --broadcast --slow
+```
+
+After deployment, verify on Sourcify:
+
+```bash
+python3 scripts/verify_sourcify.py
+```
+
+### Smoke-test (creates a vault + runs full lifecycle)
+
+```bash
+export DHP_FACTORY_BASE_SEPOLIA=<factory-address-from-deploy>
+forge script script/SmokeTest.s.sol:SmokeTest --rpc-url $BASE_SEPOLIA_RPC_URL --broadcast
+```
+
+---
+
+## 📂 Repositories
 
 | Repo | Purpose |
 |---|---|
-| **[diamond-hands-protocol](https://github.com/CryptoSI-DAO/diamond-hands-protocol)** (this repo) | Smart contracts: factory, vault, fee collector, subgraph |
-| **[diamond-hands-protocol-ui](https://github.com/CryptoSI-DAO/diamond-hands-protocol-ui)** | Official frontend dApp |
+| **[diamond-hands-protocol](https://github.com/CryptoSI-DAO/diamond-hands-protocol)** (this) | Smart contracts: factory, vault, fee collector |
+| **[diamond-hands-protocol-ui](https://github.com/CryptoSI-DAO/diamond-hands-protocol-ui)** | Frontend dApp (under construction) |
 
-## Security
+---
 
-- Built on OpenZeppelin Contracts v5 (battle-tested primitives)
-- ERC-1726 dividend math (proven across billions in TVL)
-- Each vault is individually renounced — no admin keys survive deployment
-- Factory is renounced after protocol launch
-- Pre-launch audit (see [security issue](https://github.com/CryptoSI-DAO/diamond-hands-protocol/issues/8))
+## 🔒 Security
 
-## Origin
+- Built on OpenZeppelin Contracts v5.1 (battle-tested primitives).
+- ERC-4626 share math re-implemented to fit the per-token-clone model (OZ v5 makes the underlying immutable in its constructor).
+- Dividend math follows the Synthetix StakingRewards pattern (audited across billions in TVL).
+- Reentrancy protection via `ReentrancyGuardTransient` (modern OZ v5 transient storage).
+- Each vault is **individually renounced** at deployment — no admin keys survive. The factory is `Ownable2Step` and intended to be **renounced post-launch**.
+- Pre-launch audit: **pending** — see [AUDIT_SCOPE.md](AUDIT_SCOPE.md) for in-scope contracts and test scope.
+- See [SECURITY.md](SECURITY.md) for responsible disclosure.
 
-Forked from [BSC-Hourglass-Dapp](https://github.com/safestartprotocol/BSC-Hourglass-Dapp) (the "Proof of Weak Hands" / Hourglass pattern). The original native-coin bonding curve has been rewritten as an ERC-4626 tokenized vault with modern OpenZeppelin security primitives, dividend distribution, and a permissionless factory.
+---
 
 ## ⚠️ Risk Disclosure
 
 Every Diamond Hands Vault is a **zero-sum game** by design. Payouts to diamond hands come from paper hands' taxes — not from external yield. Users can lose tokens. All vaults are renounced at launch. No team. No roadmap. No expectation of financial return. Entertainment purposes only.
 
-## License
+---
+
+## 📜 License
 
 MIT

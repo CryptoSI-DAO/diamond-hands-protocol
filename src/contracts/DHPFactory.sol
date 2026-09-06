@@ -1,0 +1,236 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.28;
+
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
+import {Clones} from "@openzeppelin/contracts/proxy/Clones.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
+import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
+
+import {DHPImplementation} from "./DHPImplementation.sol";
+import {IDHPVault} from "../interfaces/IDHPVault.sol";
+
+/// @title  DHPFactory
+/// @notice Permissionless deployment of Diamond Hands Vaults. One per ERC-20
+///         on Base (or whichever chain this factory is deployed to).
+/// @dev    Each `createVault()` call:
+///           1. Validates the underlying token against the eligibility gate.
+///           2. Clones the canonical `DHPImplementation` via EIP-1167.
+///           3. Calls `initialize()` on the clone with the chosen tax config.
+///           4. Records the (token → vault) mapping for frontend indexing.
+///
+///         Eligibility gate (configured at deploy time):
+///           • Token must expose `decimals()` returning 0–18
+///           • Caller must pass a valid `TaxConfig` (see bounds below)
+///           • A vault for this token must not already exist
+///
+///         Off-chain checks (BEFORE the on-chain tx) — done by the frontend
+///         or factory helper script — should verify:
+///           • GoPlus honeypot check passes (buy_tax=0, sell_tax=0)
+///           • Sufficient Uniswap V3 liquidity on Base
+///           • Minimum holder count
+///           • Source verified on Basescan
+///
+///         Tax config bounds (immutable after factory deploy):
+///           • entryTaxBps     ∈ [0, MAX_ENTRY_TAX_BPS=1000]   (0–10%)
+///           • exitTaxBps      ∈ [0, MAX_EXIT_TAX_BPS=2500]    (0–25%)
+///           • dividendShareBps ∈ [0, MAX_DIVIDEND_SHARE_BPS=9000] (0–90%)
+///           • dividendShareBps + 50 (protocol fee) ≤ 10000
+///
+///         The factory itself is `Ownable2Step` and is intended to be
+///         RENOUNCED post-launch (`renounceOwnership()` to 0x0). The only
+///         owner-gated function is `setVerified(token, bool)` for frontend
+///         curation; renouncing freezes it at the last set of verified tokens.
+contract DHPFactory is Ownable2Step, ReentrancyGuardTransient {
+    using Clones for address;
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // Immutable configuration (set at deploy, never mutable)
+    // ──────────────────────────────────────────────────────────────────────────
+
+    /// @notice Canonical implementation every clone proxies to.
+    address public immutable implementation;
+
+    /// @notice Protocol fee recipient (0.5% of every tax).
+    address public immutable feeCollector;
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // Tax config bounds (immutable; mirrors the vault's own checks)
+    // ──────────────────────────────────────────────────────────────────────────
+
+    uint16 public constant MAX_ENTRY_TAX_BPS = 1_000;   // 10%
+    uint16 public constant MAX_EXIT_TAX_BPS = 2_500;    // 25%
+    uint16 public constant MAX_DIVIDEND_SHARE_BPS = 9_000; // 90%
+    uint16 public constant PROTOCOL_FEE_BPS = 50;      // 0.5%
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // Mutable configuration (DAO-gated, intended to freeze post-launch)
+    // ──────────────────────────────────────────────────────────────────────────
+
+    /// @dev Minimum acceptable `decimals()` return value.
+    uint8 public minAcceptedDecimals;
+
+    /// @dev Maximum acceptable `decimals()` return value.
+    uint8 public maxAcceptedDecimals;
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // Registry state
+    // ──────────────────────────────────────────────────────────────────────────
+
+    /// @dev Mapping: underlying token → its vault address (zero if none).
+    mapping(address token => address vault) public getVault;
+
+    /// @dev Mapping: underlying token → DAO curation flag (frontend-side only).
+    mapping(address token => bool verified) public isVerified;
+
+    /// @dev Enumerable list of every vault address ever deployed.
+    address[] public allVaults;
+
+    /// @dev Mapping: vault address → its underlying token.
+    mapping(address vault => address token) public getToken;
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // Structs
+    // ──────────────────────────────────────────────────────────────────────────
+
+    struct TaxConfig {
+        uint16 entryTaxBps;
+        uint16 exitTaxBps;
+        uint16 dividendShareBps;
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // Events
+    // ──────────────────────────────────────────────────────────────────────────
+
+    event VaultCreated(
+        address indexed token,
+        address indexed vault,
+        uint16 entryTaxBps,
+        uint16 exitTaxBps,
+        uint16 dividendShareBps
+    );
+    event VerifiedSet(address indexed token, bool verified);
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // Errors
+    // ──────────────────────────────────────────────────────────────────────────
+
+    error TokenAlreadyHasVault(address existing);
+    error VaultAlreadyExistsForToken(address token);
+    error InvalidTaxConfig();
+    error InvalidToken();
+    error InvalidDecimals(uint8 returned);
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // Constructor
+    // ──────────────────────────────────────────────────────────────────────────
+
+    /// @param implementation_ Canonical DHPImplementation deployed separately.
+    /// @param feeCollector_  Protocol fee recipient (immutable).
+    /// @param minDecimals     Lower bound for token `decimals()` return.
+    /// @param maxDecimals     Upper bound for token `decimals()` return.
+    constructor(
+        address implementation_,
+        address feeCollector_,
+        uint8 minDecimals,
+        uint8 maxDecimals
+    ) Ownable(msg.sender) {
+        if (implementation_ == address(0) || feeCollector_ == address(0)) {
+            revert InvalidToken();
+        }
+        if (minDecimals > maxDecimals || maxDecimals > 18) {
+            revert InvalidToken();
+        }
+        implementation = implementation_;
+        feeCollector = feeCollector_;
+        minAcceptedDecimals = minDecimals;
+        maxAcceptedDecimals = maxDecimals;
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // Vault creation
+    // ──────────────────────────────────────────────────────────────────────────
+
+    /// @notice Deploy a new Diamond Hands Vault for `token`.
+    /// @param  token   The underlying ERC-20 the vault will wrap.
+    /// @param  cfg     Tax configuration.
+    /// @return vault   The address of the newly created clone.
+    function createVault(address token, TaxConfig calldata cfg)
+        external
+        nonReentrant
+        returns (address vault)
+    {
+        if (token == address(0)) revert InvalidToken();
+        if (getVault[token] != address(0)) revert VaultAlreadyExistsForToken(token);
+
+        // Validate tax config against immutable bounds.
+        if (cfg.entryTaxBps > MAX_ENTRY_TAX_BPS) revert InvalidTaxConfig();
+        if (cfg.exitTaxBps > MAX_EXIT_TAX_BPS) revert InvalidTaxConfig();
+        if (cfg.dividendShareBps > MAX_DIVIDEND_SHARE_BPS) revert InvalidTaxConfig();
+        if (cfg.dividendShareBps + PROTOCOL_FEE_BPS > 10_000) revert InvalidTaxConfig();
+
+        // Validate the token's `decimals()` return. We require a sane answer
+        // between minDecimals and maxDecimals (default [0, 18]). Tokens that
+        // revert or return something out-of-range are rejected here.
+        uint8 dec;
+        // solhint-disable-next-line no-inline-assembly
+        assembly {
+            // Try a static call to decimals(); on failure leave dec = 0xff.
+            // We can't easily catch the revert inline without try/catch, so
+            // we fall back to try/catch in Solidity below.
+        }
+        try IERC20Metadata(token).decimals() returns (uint8 d) {
+            dec = d;
+        } catch {
+            revert InvalidToken();
+        }
+        if (dec < minAcceptedDecimals || dec > maxAcceptedDecimals) {
+            revert InvalidDecimals(dec);
+        }
+
+        // Clone + initialise.
+        vault = implementation.clone();
+        DHPImplementation(payable(vault)).initialize(
+            IERC20(token),
+            feeCollector,
+            cfg.entryTaxBps,
+            cfg.exitTaxBps,
+            cfg.dividendShareBps
+        );
+
+        // Register.
+        getVault[token] = vault;
+        getToken[vault] = token;
+        allVaults.push(vault);
+
+        emit VaultCreated(token, vault, cfg.entryTaxBps, cfg.exitTaxBps, cfg.dividendShareBps);
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // Frontend curation (DAO-gated; inert post-renounce)
+    // ──────────────────────────────────────────────────────────────────────────
+
+    /// @notice Mark a token as DAO-verified for frontend curation.
+    ///         The frontend shows verified vaults by default; unverified
+    ///         vaults still work but are flagged.
+    function setVerified(address token, bool verified_) external onlyOwner {
+        isVerified[token] = verified_;
+        emit VerifiedSet(token, verified_);
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // View helpers
+    // ──────────────────────────────────────────────────────────────────────────
+
+    /// @notice Total number of vaults ever deployed (monotonic).
+    function vaultCount() external view returns (uint256) {
+        return allVaults.length;
+    }
+
+    /// @notice Returns the vault address at index `i` in the registry.
+    function allVaultsAt(uint256 i) external view returns (address) {
+        return allVaults[i];
+    }
+}

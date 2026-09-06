@@ -19,3 +19,7 @@ lcov.info
 
 # Node (defensive)
 node_modules/
+
+# Testnet burners (NEVER commit)
+.dhp-testnet/
+.bidify-testnet/

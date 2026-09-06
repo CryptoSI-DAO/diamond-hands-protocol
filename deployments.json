@@ -1,0 +1,58 @@
+{
+  "network": "base_sepolia",
+  "chainId": 84532,
+  "deployer": "0x25c7F96825166Cb5d436D7B6A6C2EDB49221d5b8",
+  "deployBlock": null,
+  "contracts": {
+    "DHPImplementation": {
+      "address": "0x562e4ECa55ccA4Bb411a81f2605F992C00395f0f",
+      "txHash": "0xd9fc8ac7449812985927aa188e2f1a79797ba2440b87630c24102f3ade3c2e7d",
+      "verified": "sourcify:exact_match",
+      "owner": "0x25c7F96825166Cb5d436D7B6A6C2EDB49221d5b8",
+      "renounced": false
+    },
+    "DHPFeeCollector": {
+      "address": "0x11F41D72E8e612b94b831Df38B12F5Bc3D58D87C",
+      "txHash": "0xa36a75711fabbb825c1c699110e4d1c42ee5f58a5819a979a78ac2f84f51a129",
+      "verified": "sourcify:exact_match",
+      "owner": "0x25c7F96825166Cb5d436D7B6A6C2EDB49221d5b8",
+      "renounced": false,
+      "defaultTreasury": "0x25c7F96825166Cb5d436D7B6A6C2EDB49221d5b8"
+    },
+    "DHPFactory": {
+      "address": "0xee1e2343E513736f29ceeF24071B63874661273F",
+      "txHash": "0x4feaacf205d1e20ed5190d7e9c3992ab5f755b9cd0f7bbf655704dca161c3e19",
+      "verified": "sourcify:exact_match",
+      "implementation": "0x562e4ECa55ccA4Bb411a81f2605F992C00395f0f",
+      "feeCollector": "0x11F41D72E8e612b94b831Df38B12F5Bc3D58D87C",
+      "owner": "0x25c7F96825166Cb5d436D7B6A6C2EDB49221d5b8",
+      "renounced": false
+    }
+  },
+  "smokeTest": {
+    "token": "0x7756A4411C2feA2ACA2d3E7870603d8AfF8d46B",
+    "vault": "0xff57f93F22a9273C3Af4a42BF64A56C36C6Eb436",
+    "txHashes": [
+      "0xd9fc8ac7449812985927aa188e2f1a79797ba2440b87630c24102f3ade3c2e7d",
+      "0xa36a75711fabbb825c1c699110e4d1c42ee5f58a5819a979a78ac2f84f51a129",
+      "0x4feaacf205d1e20ed5190d7e9c3992ab5f755b9cd0f7bbf655704dca161c3e19"
+    ],
+    "results": {
+      "deposit1_shares_minted": 950000000000,
+      "deposit1_totalAssets": 985000000000,
+      "deposit1_rpTs": 0,
+      "deposit2_shares_minted": 458121827411,
+      "deposit2_rpTs": 36842105263157894,
+      "claimed_dividend": 34999999999,
+      "redeem_assets_received": 587458047946,
+      "feeCollector_balance": 826365582
+    },
+    "interpretation": {
+      "deposit1": "10_000 SPX deposit, 5% entry tax = 500 SPX tax split as 350 SPX dividend + 2.5 SPX protocol fee + 147.5 SPX burn. Vault holds 985 SPX.",
+      "deposit2": "Second 10_000 SPX deposit diluted by dividend pool. rpTs advances by 350e8 * 1e18 / 9_500e8 ≈ 3.68e16.",
+      "claim": "Exactly 350 SPX claimed — the dividend pool from first deposit. ✓",
+      "redeem": "Half shares burned, exit tax applied.",
+      "feeCollector": "Protocol fees accumulate: 826 SPX = ~2 deposits × ~0.25 SPX fee + redeems."
+    }
+  }
+}

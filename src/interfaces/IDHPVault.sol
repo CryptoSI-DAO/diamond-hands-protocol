@@ -16,8 +16,11 @@ interface IDHPVault {
     // Views
     // ──────────────────────────────────────────────────────────────────────────
 
-    /// @notice The underlying token this vault wraps.
-    function asset() external view returns (IERC20);
+    /// @notice Returns the underlying ERC-20 this vault wraps.
+    function asset() external view returns (IERC20 assetTokenAddress);
+
+    /// @notice Total underlying assets currently held by the vault.
+    function totalAssets() external view returns (uint256 totalManagedAssets);
 
     /// @notice The factory that deployed this vault.
     function factory() external view returns (address);
@@ -49,6 +52,10 @@ interface IDHPVault {
 
     /// @notice Total assets currently held by the vault (post-tax).
     function totalAssetsAfterTax() external view returns (uint256);
+
+    // (Note: ERC-20 share surface — balanceOf, totalSupply, transfer, approve —
+//  is inherited from the underlying ERC20 base; not redeclared here to
+//  avoid OZ's public/external visibility mismatch.)
 
     // ──────────────────────────────────────────────────────────────────────────
     // User actions

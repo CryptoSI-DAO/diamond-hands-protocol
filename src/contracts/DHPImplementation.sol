@@ -305,16 +305,15 @@ contract DHPImplementation is ERC20, ReentrancyGuardTransient, Pausable, Ownable
         uint256 postBal = _assetToken.balanceOf(address(this));
         if (postBal - preBal != assets) revert FeeOnTransferToken();
 
-        // Dividend accounting: update pool before mutating shares.
+        // Dividend accounting: send fee+burn out first so totalAssets is correct,
+// then accrue the dividend index (using pre-mint supply), then mint shares
+// based on the post-tax exchange rate.
+        _distributeTax(tax);
         _accrueDividend(tax);
 
         shares = _convertToShares(net, /*roundingUp=*/ false);
         if (shares == 0) revert ZeroAmount();
         _mint(receiver, shares);
-
-        // Distribute the tax (must happen AFTER dividend accrual but doesn't
-        // affect balance math since dividends are bookkeeping only).
-        _distributeTax(tax);
 
         emit Deposit(msg.sender, receiver, assets, shares);
     }
@@ -379,16 +378,19 @@ contract DHPImplementation is ERC20, ReentrancyGuardTransient, Pausable, Ownable
 
         _burn(owner_, shares);
 
-        // Update dividend index with the tax contribution.
-        _accrueDividend(tax);
-
         // Send the net to the user. Anti-FOT: confirm the user received `assets`.
+        // Done BEFORE _distributeTax so the safeTransfer can't be reordered against
+        // the dividend math (CEI pattern: transfer value out, then update book).
         uint256 preBal = _assetToken.balanceOf(receiver);
         _assetToken.safeTransfer(receiver, assets);
         uint256 postBal = _assetToken.balanceOf(receiver);
         if (postBal - preBal != assets) revert FeeOnTransferToken();
 
+        // Dividend accrual + tax distribution happen AFTER the burn + transfer so
+        // totalAssets() reflects the post-exit vault state (fee + burn sent out,
+        // dividend portion still backing remaining shareholders).
         _distributeTax(tax);
+        _accrueDividend(tax);
 
         emit Withdraw(msg.sender, receiver, owner_, assets, shares);
     }
@@ -414,14 +416,16 @@ contract DHPImplementation is ERC20, ReentrancyGuardTransient, Pausable, Ownable
         assets = grossValue - tax;
 
         _burn(owner_, shares);
-        _accrueDividend(tax);
 
+        // Send the net to the user. Anti-FOT: confirm the user received `assets`.
         uint256 preBal = _assetToken.balanceOf(receiver);
         _assetToken.safeTransfer(receiver, assets);
         uint256 postBal = _assetToken.balanceOf(receiver);
         if (postBal - preBal != assets) revert FeeOnTransferToken();
 
+        // Tax distribution + dividend accrual happen AFTER the burn + transfer.
         _distributeTax(tax);
+        _accrueDividend(tax);
 
         emit Withdraw(msg.sender, receiver, owner_, assets, shares);
     }
