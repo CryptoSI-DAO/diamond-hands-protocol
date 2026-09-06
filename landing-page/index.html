@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Diamond Hands Protocol - DHP</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/minimal.css">
+    <style>
+        :root {
+            --bg: #0a0a0f;
+            --bg-secondary: #12121a;
+            --fg: #e8e8f0;
+            --muted: #6b6b80;
+            --accent: #00d4aa;
+            --accent-hover: #00f5c4;
+            --card: #1a1a24;
+            --border: #2a2a3a;
+            --muted-border: #3a3a4a;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+            background: var(--bg);
+            color: var(--fg);
+            margin: 0;
+            padding: 0;
+            line-height: 1.6;
+        }
+
+        a {
+            color: var(--accent);
+            text-decoration: none;
+            transition: color 0.2s ease;
+        }
+
+        a:hover {
+            color: var(--accent-hover);
+        }
+
+        .container {
+            max-width: 960px;
+            margin: 0 auto;
+            padding: 0 20px;
+        }
+
+        /* Header */
+        header {
+            padding: 40px 0 20px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .header-content {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .logo {
+            font-size: 28px;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+        }
+
+        .nav-links a {
+            margin-left: 24px;
+            color: var(--muted);
+            font-size: 14px;
+        }
+
+        .nav-links a:hover {
+            color: var(--fg);
+        }
+
+        /* Hero */
+        .hero {
+            min-height: 600px;
+            padding: 80px 0 40px;
+            position: relative;
+        }
+
+        .hero-badge {
+            position: absolute;
+            top: 30px;
+            left: 0;
+        }
+
+        .hero-badge span {
+            background: var(--accent);
+            color: var(--bg);
+            padding: 6px 12px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .hero h1 {
+            font-size: 48px;
+            font-weight: 700;
+            line-height: 1.1;
+            letter-spacing: -0.03em;
+            margin-bottom: 20px;
+        }
+
+        .hero p {
+            font-size: 18px;
+            color: var(--muted);
+            line-height: 1.8;
+            max-width: 600px;
+        }
+
+        .hero-features {
+            margin-top: 60px;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+        }
+
+        .feature-card {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 24px;
+            transition: transform 0.2s ease, border-color 0.2s ease;
+        }
+
+        .feature-card:hover {
+            border-color: var(--accent);
+            transform: translateY(-4px);
+        }
+
+        .feature-icon {
+            width: 48px;
+            height: 48px;
+            background: var(--accent);
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 16px;
+        }
+
+        .feature-icon svg {
+            width: 24px;
+            height: 24px;
+            stroke: var(--bg);
+            fill: none;
+        }
+
+        .feature-card h3 {
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+
+        .feature-card p {
+            font-size: 14px;
+            color: var(--muted);
+            line-height: 1.5;
+        }
+
+        /* Features Grid */
+        .features {
+            padding: 80px 0;
+        }
+
+        .features h2 {
+            font-size: 32px;
+            font-weight: 700;
+            margin-bottom: 24px;
+        }
+
+        /* Contracts Section */
+        .contracts {
+            padding: 80px 0;
+            background: var(--bg-secondary);
+        }
+
+        .contracts h2 {
+            font-size: 32px;
+            font-weight: 700;
+            margin-bottom: 24px;
+        }
+
+        .contracts-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 24px;
+        }
+
+        .contract-card {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 24px;
+            transition: transform 0.2s ease;
+        }
+
+        .contract-card:hover {
+            transform: translateY(-4px);
+        }
+
+        .contract-card h3 {
+            font-size: 20px;
+            font-weight: 600;
+            margin-bottom: 12px;
+        }
+
+        .contract-card p {
+            font-size: 14px;
+            color: var(--muted);
+            line-height: 1.5;
+        }
+
+        .contract-address {
+            background: var(--bg-secondary);
+            padding: 12px;
+            border-radius: 8px;
+            margin-top: 12px;
+            font-family: 'SF Mono', 'Courier New', monospace;
+            word-break: break-all;
+            font-size: 12px;
+        }
+
+        /* Features Grid Items */
+        .feature-card:nth-child(1) .feature-icon svg { stroke: #00d4aa; }
+        .feature-card:nth-child(2) .feature-icon svg { stroke: #00d4aa; }
+        .feature-card:nth-child(3) .feature-icon svg { stroke: #00d4aa; }
+
+        /* Roadmap */
+        .roadmap {
+            padding: 80px 0;
+        }
+
+        .roadmap h2 {
+            font-size: 32px;
+            font-weight: 700;
+            margin-bottom: 24px;
+        }
+
+        .roadmap-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+        }
+
+        .roadmap-item {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 20px;
+            text-align: center;
+        }
+
+        .roadmap-item h3 {
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+
+        .roadmap-item p {
+            font-size: 13px;
+            color: var(--muted);
+        }
+
+        /* CTA */
+        .cta {
+            padding: 80px 0;
+            text-align: center;
+        }
+
+        .cta h2 {
+            font-size: 32px;
+            font-weight: 700;
+            margin-bottom: 20px;
+        }
+
+        .cta p {
+            color: var(--muted);
+            margin-bottom: 32px;
+            max-width: 600px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+
+        .cta-btn {
+            background: var(--accent);
+            color: var(--bg);
+            padding: 16px 32px;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            display: inline-block;
+            transition: background 0.2s ease;
+        }
+
+        .cta-btn:hover {
+            background: var(--accent-hover);
+        }
+
+        /* Features */
+        .feature-icon svg { width: 24px; height: 24px; }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .hero h1 { font-size: 32px; }
+            .nav-links { display: none; }
+            .hero-features { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="container header-content">
+            <div class="logo">DHP</div>
+            <nav class="nav-links">
+                <a href="#features">Features</a>
+                <a href="#contracts">Contracts</a>
+                <a href="#roadmap">Roadmap</a>
+                <a href="#cta">Launch</a>
+            </nav>
+        </div>
+    </header>
+
+    <header class="hero">
+        <div class="hero-badge"><span>Base Sepolia Deployed</span></div>
+        <h1>Diamond Hands Protocol</h1>
+        <p>A permissionless vault factory on Base Network where every deposit and withdrawal pays a tax that flows to holders as dividends and burns tokens forever. The longer you hold, the more you earn from those who don't.</p>
+        
+        <div class="hero-features">
+            <div class="feature-card">
+                <div class="feature-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke-width="1.5">
+                        <path d="M12 22s8-4 12-4 8 4 12 4"/>
+                        <path d="M21 21l-6-6m2.1-5.4c3.9-3.9 3.9-10.29 0-14.1"/>
+                    </path>
+                </div>
+                <h3>Permissionless</h3>
+                <p>Anyone can deploy a vault for any ERC-20 token. No permissions required.</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke-width="1.5">
+                        <circle cx="12" cy="12" r="10"/>
+                        <path d="M8 12l4-4m4 4l4 4"/>
+                    </path>
+                </div>
+                <h3>Dividend Distribution</h3>
+                <p>Every tax event distributes dividends proportional to holdings. Holders earn from every transaction.</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke-width="1.5">
+                        <circle cx="12" cy="12" r="3"/>
+                        <path d="M12 2v4l10 10"/>
+                    </path>
+                </div>
+                <h3>Protocol Fee</h3>
+                <p>0.5% of every tax goes to the protocol treasury. Community-owned and transparent.</p>
+            </div>
+        </div>
+    </header>
+
+    <section class="features">
+        <h2>How It Works</h2>
+        <div class="hero-features">
+            <div class="feature-card">
+                <div class="feature-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke-width="1.5">
+                        <path d="M12 22s8-4 12-4 8 4 12 4"/>
+                        <path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0"/>
+                    </path>
+                </div>
+                <h3>Deposit & Earn</h3>
+                <p>Users deposit tokens into the vault. A portion of every deposit is taxed.</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke-width="1.5">
+                        <circle cx="12" cy="12" r="10"/>
+                        <path d="M8 12l4-4m4 4l4 4"/>
+                    </path>
+                </div>
+                <h3>Tax Distribution</h3>
+                <p>Every tax event splits: dividends to holders, 0.5% protocol fee, remainder burned.</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke-width="1.5">
+                        <circle cx="12" cy="12" r="3"/>
+                        <path d="M14 2v4l10 10"/>
+                        <path d="M2 9l10 10"/>
+                    </path>
+                </div>
+                <h3>Claim Dividends</h3>
+                <p>Users can claim their accumulated dividends at any time. Paid in the underlying token.</p>
+            </div>
+        </div>
+    </section>
+
+    <section class="contracts">
+        <div class="container">
+            <h2>Contracts</h2>
+            <div class="contracts-grid">
+                <div class="contract-card">
+                    <h3>DHPImplementation</h3>
+                    <p>Core vault logic with ERC20 share math, dividend distribution, and tax splits.</p>
+                    <div class="contract-address">0x562e4ECa55ccA4Bb411a81f2605F992C00395f0f</div>
+                </div>
+                <div class="contract-card">
+                    <h3>DHPFactory</h3>
+                    <p>Permissionless vault deployment via EIP-1167 clones. Registry of all vaults.</p>
+                    <div class="contract-address">0xee1e2343E513736f29ceeF24071B63874661273F</div>
+                </div>
+                <div class="contract-card">
+                    <h3>DHPFeeCollector</h3>
+                    <p>Accumulates 0.5% protocol fees from all vaults. Swappable per-token destination.</p>
+                    <div class="contract-address">0x11F41D72E8e612b94b831Df38B12F5Bc3D58D87C</div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="roadmap">
+        <div class="container">
+            <h2>Roadmap</h2>
+            <div class="roadmap-grid">
+                <div class="roadmap-item">
+                    <h3>Base Sepolia</h3>
+                    <p>Deployed & verified</p>
+                </div>
+                <div class="roadmap-item">
+                    <h3>Base Mainnet</h3>
+                    <p>Post-audit deployment</p>
+                </div>
+                <div class="roadmap-item">
+                    <h3>BNB Chain</h3>
+                    <p>Deployment planned</p>
+                </div>
+                <div class="roadmap-item">
+                    <h3>Ethereum Mainnet</h3>
+                    <p>Post-audit deployment</p>
+                </div>
+                <div class="roadmap-item">
+                    <h3>Robinhood Chain</h3>
+                    <p>Arbitrum Orbit deployment</p>
+                </div>
+            </div>
+        </section>
+
+        <section class="cta">
+            <h2>Launch Soon</h2>
+            <p>Diamond Hands Protocol launching on Base Sepolia. Multi-chain deployment following audit completion.</p>
+            <a href="#" class="cta-btn">Learn More</a>
+        </section>
+    </footer>
+</body>
+</html>
