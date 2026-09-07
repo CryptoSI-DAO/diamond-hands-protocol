@@ -144,6 +144,7 @@ contract DHPImplementation is ERC20, ReentrancyGuardTransient, Pausable, Ownable
     error ZeroAddress();
     error ZeroAmount();
     error NoPendingDividend();
+    error BelowMinimumFirstDeposit(uint256 required, uint256 provided);
 
     // ──────────────────────────────────────────────────────────────────────────
     // Modifiers
@@ -169,12 +170,16 @@ contract DHPImplementation is ERC20, ReentrancyGuardTransient, Pausable, Ownable
     // ──────────────────────────────────────────────────────────────────────────
 
     /// @notice One-shot initialisation called by DHPFactory on a fresh clone.
+    /// @param minFirstDeposit_  Per-vault minimum first deposit in raw token
+    ///                          units. Prevents 1-wei squat attacks on vaults
+    ///                          for tokens with high decimals (see M-NEW-2).
     function initialize(
         IERC20 token_,
         address feeCollector_,
         uint16 entryTaxBps_,
         uint16 exitTaxBps_,
-        uint16 dividendShareBps_
+        uint16 dividendShareBps_,
+        uint256 minFirstDeposit_
     ) external {
         if (_vaultInitialised) revert AlreadyInitialised();
         if (address(token_) == address(0) || feeCollector_ == address(0)) revert ZeroAddress();
@@ -189,6 +194,7 @@ contract DHPImplementation is ERC20, ReentrancyGuardTransient, Pausable, Ownable
         exitTaxBps = exitTaxBps_;
         dividendShareBps = dividendShareBps_;
         _assetToken = token_;
+        minFirstDeposit = minFirstDeposit_;
 
         // Build vault-specific ERC-20 metadata (name + symbol).
         string memory underlyingSym = IERC20Metadata(address(token_)).symbol();
@@ -228,25 +234,28 @@ contract DHPImplementation is ERC20, ReentrancyGuardTransient, Pausable, Ownable
     ///         in `burnedBalance` are effectively removed from circulation
     ///         but stay in this contract (no external burn address required,
     ///         so the protocol works on tokens that blacklist 0x…dEaD).
+    /// @dev    For rebasing tokens (stETH, AMPL, etc.), `balanceOf` can drop
+    ///         below `burnedBalance` on a negative rebase. In that case this
+    ///         function REVERTS loudly rather than silently returning 0. Silent
+    ///         0 would silently make all shares appear worthless and let
+    ///         griefers steal value. Loud revert is the safer failure mode —
+    ///         off-chain indexers see the failure and can alert the team.
     function totalAssets() public view returns (uint256) {
         uint256 bal = _assetToken.balanceOf(address(this));
-        // Defense in depth: balanceOf can return less than expected for
-        // rebasing tokens; cap the subtraction at bal to avoid underflow.
-        return bal > burnedBalance ? bal - burnedBalance : 0;
+        require(
+            bal >= burnedBalance,
+            "DHP: token balance below burn accumulator (rebase or accounting issue)"
+        );
+        return bal - burnedBalance;
     }
 
-    /// @dev Minimum first-deposit size (in raw token units). This is the
-    ///      anti-inflation-attack guard (audit H-3): by requiring the first
-    ///      depositor to deposit a meaningful amount, we prevent 1-wei squat
-    ///      attacks where an attacker deposits 1 wei, then the next "real"
-    ///      depositor loses half their deposit to the dividend pool.
-    ///      Set to 1e10 raw units:
-    ///        - 18-decimal tokens: 1e10/1e18 = 1e-8 = 0.00000001 ETH (~$0.03)
-    ///        -  8-decimal tokens: 1e10/1e8  = 100 token units
-    ///        -  6-decimal tokens: 1e10/1e6  = 10,000 token units
-    ///      Trivial for legitimate users; prohibitive for griefers (each
-    ///      squat attempt costs real money).
-    uint256 public constant MIN_FIRST_DEPOSIT = 1e10;
+    /// @dev Per-vault minimum first-deposit size (in raw token units). Set in
+    ///      `initialize()`. Default is 1e10 raw (~0.00000001 ETH for 18-decimal,
+    ///      ~100 token units for 8-decimal, ~10,000 token units for 6-decimal).
+    ///      Made per-vault so the factory owner can configure it appropriately
+    ///      for the token's decimals. (Audit finding M-NEW-2: a single constant
+    ///      is vulnerable for 18-decimal tokens where 1e10 raw = $0.00004.)
+    uint256 public minFirstDeposit;
 
     // ──────────────────────────────────────────────────────────────────────────
     // ERC-4626 share accounting (re-implemented; not inherited)
@@ -333,8 +342,12 @@ contract DHPImplementation is ERC20, ReentrancyGuardTransient, Pausable, Ownable
         // deposit. This prevents 1-wei squat attacks where a griefer takes
         // the first-depositor slot and then captures subsequent real
         // depositors' funds via the dividend pool. (Audit finding H-3.)
-        if (totalSupply() == 0 && assets < MIN_FIRST_DEPOSIT) {
-            revert ZeroAmount();
+        // The minimum is per-vault (set in initialize()) and should be set
+        // relative to the token's decimals. For 18-decimal tokens, 1e15
+        // raw = $0.0004 which is still a meaningful cost. For 6-decimal
+        // tokens, the factory owner should set it to 1e6 raw = 1.0 token.
+        if (totalSupply() == 0 && assets < minFirstDeposit) {
+            revert BelowMinimumFirstDeposit(minFirstDeposit, assets);
         }
 
         uint256 tax = (assets * entryTaxBps) / BPS;
@@ -556,6 +569,24 @@ contract DHPImplementation is ERC20, ReentrancyGuardTransient, Pausable, Ownable
         uint256 postBal = _assetToken.balanceOf(msg.sender);
         if (postBal - preBal != amount) revert FeeOnTransferToken();
         emit DividendClaimed(msg.sender, amount);
+    }
+
+    /// @notice Total tokens burned (lock-in-vault accumulator). The amount of
+    ///         underlying tokens that have been "burned" through the tax
+    ///         mechanism but remain in the contract (subtracted from
+    ///         totalAssets()). This is a public view that does NOT require
+    ///         summing all TokensBurned events. (Audit finding M-NEW-1.)
+    function totalBurned() external view returns (uint256) {
+        return burnedBalance;
+    }
+
+    /// @notice Available dividend pool = the amount of underlying tokens
+    ///         currently backing unpaid dividends. Used by external
+    ///         integrations and for sanity checks.
+    function availableDividendPool() external view returns (uint256) {
+        // This may revert if the underlying token has rebased negatively.
+        // (See audit finding C-NEW-1: we revert loudly on underflow.)
+        return totalAssets();
     }
 
     // ──────────────────────────────────────────────────────────────────────────

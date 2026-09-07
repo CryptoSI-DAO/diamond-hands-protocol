@@ -177,15 +177,14 @@ contract DHPFactory is Ownable2Step, ReentrancyGuardTransient {
         nonReentrant
         returns (address vault)
     {
-        // Anti-grief: require the creation fee. Refund any excess.
-        uint256 paid = msg.value;
-        if (paid < VAULT_CREATION_FEE) {
+        // Anti-grief: require EXACTLY the creation fee (no refund). Refunding
+        // excess was removed in v1.2 because contracts with a reverting
+        // receive() function could grief by sending excess and trapping the
+        // refund inside the factory forever. Requiring the exact fee also
+        // avoids the silent-fee-loss risk if the refund call reverts for any
+        // reason (out-of-gas in caller, etc.). Excess ETH is no longer accepted.
+        if (msg.value != VAULT_CREATION_FEE) {
             revert InsufficientCreationFee();
-        }
-        if (paid > VAULT_CREATION_FEE) {
-            // Refund the excess to the caller.
-            (bool ok, ) = payable(msg.sender).call{value: paid - VAULT_CREATION_FEE}("");
-            require(ok, "Fee refund failed");
         }
 
         if (token == address(0)) revert InvalidToken();
@@ -216,14 +215,20 @@ contract DHPFactory is Ownable2Step, ReentrancyGuardTransient {
             revert InvalidDecimals(dec);
         }
 
-        // Clone + initialise.
+        // Clone + initialise. The minimum first deposit is set per-vault based
+        // on the token's decimals (10^decimals, so 1.0 token unit). This
+        // ensures the inflation-attack guard is meaningful for all decimal
+        // configurations (1.0 SPX for 6-decimal tokens, 1.0 wstETH for
+        // 18-decimal tokens). See audit finding M-NEW-2.
+        uint256 minFirstDeposit = 10 ** IERC20Metadata(token).decimals();
         vault = implementation.clone();
         DHPImplementation(payable(vault)).initialize(
             IERC20(token),
             feeCollector,
             cfg.entryTaxBps,
             cfg.exitTaxBps,
-            cfg.dividendShareBps
+            cfg.dividendShareBps,
+            minFirstDeposit
         );
 
         // Register.

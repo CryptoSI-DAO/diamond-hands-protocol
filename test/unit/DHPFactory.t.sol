@@ -268,6 +268,73 @@ contract DHPFactoryTest is Test {
         factory.acceptOwnership();
         assertEq(factory.owner(), alice, "ownership transferred after accept");
     }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // v1.2 audit-fix tests
+    // ──────────────────────────────────────────────────────────────────────────
+
+    function test_create_vault_exact_fee_succeeds() public {
+        // H-NEW-1 fix: msg.value must EXACTLY match VAULT_CREATION_FEE.
+        address v = _createVaultWithFee(address(tokenA), _validCfg());
+        assertTrue(v != address(0), "vault created with exact fee");
+    }
+
+    function test_create_vault_excess_fee_reverts() public {
+        // H-NEW-1 fix: Sending MORE than the required fee reverts (no refund path).
+        // Prevents griefing via bad-receive contracts that would trap the
+        // refund inside the factory forever.
+        // Cache the fee BEFORE setting expectRevert so the staticcall
+        // doesn't consume the expectation.
+        uint256 fee = factory.VAULT_CREATION_FEE();
+        vm.expectRevert(DHPFactory.InsufficientCreationFee.selector);
+        factory.createVault{value: fee + 1}(address(tokenA), _validCfg());
+    }
+
+    function test_create_vault_below_fee_reverts() public {
+        // H-NEW-1 fix: Sending LESS than the required fee reverts.
+        uint256 fee = factory.VAULT_CREATION_FEE();
+        vm.expectRevert(DHPFactory.InsufficientCreationFee.selector);
+        factory.createVault{value: fee - 1}(address(tokenA), _validCfg());
+    }
+
+    function test_create_vault_zero_fee_reverts() public {
+        // H-NEW-1 fix: Sending 0 reverts.
+        vm.expectRevert(DHPFactory.InsufficientCreationFee.selector);
+        factory.createVault(address(tokenA), _validCfg());
+    }
+
+    function test_create_vault_bad_receive_does_not_trap_eth() public {
+        // H-NEW-1 fix: With exact-fee requirement, a contract with a reverting
+        // receive() function can still create vaults without griefing.
+        // (Previously: refund would fail, trapping the caller's ETH.)
+        BadReceiver bad = new BadReceiver();
+        DHPFactory.TaxConfig memory cfg = _validCfg();
+        // Fund BadReceiver with exactly the fee.
+        vm.deal(address(bad), factory.VAULT_CREATION_FEE());
+        vm.prank(address(bad));
+        address v = factory.createVault{value: factory.VAULT_CREATION_FEE()}(address(tokenA), cfg);
+        assertTrue(v != address(0), "vault created even with bad receive()");
+
+        // The factory should have received the fee and forwarded it to feeCollector.
+        // No ETH should be stuck in the factory.
+        assertEq(address(factory).balance, 0, "no ETH stuck in factory");
+    }
+}
+
+/// @notice Mock that always reverts on receive(). Used to test the H-NEW-1
+///         fix: with exact-fee requirement, this contract can create vaults
+///         without griefing the factory by trapping refunds.
+contract BadReceiver {
+    receive() external payable {
+        revert("BadReceiver refuses payment");
+    }
+    fallback() external payable {
+        revert("BadReceiver refuses payment");
+    }
+
+    function dummy() external pure returns (uint256) {
+        return 1;
+    }
 }
 
 /// @notice Mock that reverts on `decimals()` — used to test the factory's

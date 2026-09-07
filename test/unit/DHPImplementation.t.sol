@@ -365,6 +365,91 @@ contract DHPImplementationTest is Test {
     }
 
     // ──────────────────────────────────────────────────────────────────────────
+    // v1.2 audit-fix tests
+    // ──────────────────────────────────────────────────────────────────────────
+
+    function test_min_first_deposit_below_minimum_reverts() public {
+        // C-NEW-1 fix: meaningful per-vault minFirstDeposit.
+        // For our 8-decimal token, the factory would set minFirstDeposit = 1e8
+        // (= 1.0 token). A deposit of 0.5 tokens should revert.
+        // (The test setUp uses the new 6-arg initialize, so we can read
+        // minFirstDeposit from the deployed vault.)
+        uint256 configuredMin = vault.minFirstDeposit();
+        assertGt(configuredMin, 0, "minFirstDeposit should be set");
+
+        // vm.prank(alice); v.deposit(configuredMin - 1, alice); // should revert
+        vm.prank(alice);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                DHPImplementation.BelowMinimumFirstDeposit.selector,
+                configuredMin,
+                configuredMin - 1
+            )
+        );
+        v.deposit(configuredMin - 1, alice);
+    }
+
+    function test_min_first_deposit_at_minimum_succeeds() public {
+        // Boundary: exactly at the minimum should succeed.
+        uint256 configuredMin = vault.minFirstDeposit();
+
+        vm.prank(alice);
+        uint256 shares = v.deposit(configuredMin, alice);
+        assertGt(shares, 0, "deposit at minimum succeeds and mints shares");
+    }
+
+    function test_total_burned_view_returns_cumulative() public {
+        // M-NEW-1: totalBurned() view returns the locked-in-vault accumulator.
+        assertEq(vault.totalBurned(), 0, "no burns before any deposits");
+
+        vm.prank(alice);
+        v.deposit(10_000e8, alice);
+        // First deposit: tax=500 SPX, burn=147.5 SPX = 14_750_000_000 raw
+        assertEq(vault.totalBurned(), 14_750_000_000, "burn after first deposit");
+
+        vm.prank(bob);
+        v.deposit(10_000e8, bob);
+        // Second deposit: another 14.75 SPX burned
+        assertEq(vault.totalBurned(), 29_500_000_000, "burn accumulates");
+    }
+
+    function test_min_first_deposit_configured_correctly() public {
+        // M-NEW-2: For an 8-decimal token, factory should set minFirstDeposit
+        // = 10^8 = 1.0 token unit. This means a 1-wei squat is impossible
+        // (would cost 1.0 token, not 0.000001 token).
+        assertEq(vault.minFirstDeposit(), 10 ** 8, "8-decimal token min = 1.0 token");
+    }
+
+    function test_total_assets_reverts_on_negative_rebase() public {
+        // C-NEW-1 fix: totalAssets() must REVERT (not silently return 0) when
+        // the underlying token balance drops below burnedBalance. This catches
+        // rebasing tokens like stETH/AMPL after a negative rebase.
+        //
+        // We simulate the rebase by:
+        // 1. Depositing some tokens (creates burnedBalance)
+        // 2. Burning tokens directly from the vault (simulating a negative rebase)
+        //
+        // The MockERC20 has a burn function that lets us simulate this.
+        vm.prank(alice);
+        v.deposit(10_000e8, alice);
+        uint256 vaultBalBefore = token.balanceOf(address(vault));
+        assertGt(vaultBalBefore, 0, "vault has tokens");
+        assertEq(v.totalAssets(), 985_000_000_000, "totalAssets before rebase");
+
+        // Simulate a SEVERE negative rebase: burn enough to drop balance
+        // below burnedBalance. burnedBalance = 14_750_000_000 (~147.5 SPX).
+        // We burn so balance drops from 999_750_000_000 to ~1.
+        token.burn(address(vault), 999_000_000_000); // burn 9,990 SPX
+
+        uint256 balAfter = token.balanceOf(address(vault));
+        assertLt(balAfter, vault.burnedBalance(), "rebase simulated");
+
+        // totalAssets() should now REVERT, not silently return 0.
+        vm.expectRevert("DHP: token balance below burn accumulator (rebase or accounting issue)");
+        v.totalAssets();
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
     // Helpers
     // ──────────────────────────────────────────────────────────────────────────
 
