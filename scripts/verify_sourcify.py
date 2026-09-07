@@ -24,15 +24,15 @@ SOLC_VERSION = "0.8.28+commit.7893614a"  # foundry build
 
 # (address, contract_identifier, source_path_relative_to_project_root, creation_tx_hash)
 CONTRACTS = [
-    ("0xb44d4724092809c37eba61f822b6a8594cf7d975",
+    ("0x8087317540a6a536a2a88ebf9a2174a95833bf36",
      "src/contracts/DHPImplementation.sol:DHPImplementation",
-     "0x0afde90bbe3b499cf02334b609c3a859569c7dfb27ce806a323ad59ecdea3a85"),
-    ("0xc9368870739718972380b80eb9de157de51e39bd",
+     "0xdb91a05dc4d73fded1a97f9fce4a00d9b828448cc1180c7fe130a4d2ba970e8f"),
+    ("0xcfabbd5f1c1bf369ccdbfacf798dcf79ba9e31ab",
      "src/contracts/DHPFeeCollector.sol:DHPFeeCollector",
-     "0x9877ba1d0629e0ad7249eae4756e1dd3fa9f401fcf76d41bdf42db016501e97f"),
-    ("0x86fdfdcad0ee32c1aa39b8f9ce98e8dbad906c90",
+     "0x5e153630e74a09f75c735887182623dc1a5381d5631174bab0e43c9ee0d46d14"),
+    ("0x8eb10373b3e9fcf99391f32a9c3560334adab120",
      "src/contracts/DHPFactory.sol:DHPFactory",
-     "0xf98c1943bf589b4224802f5be04e3f12a565c4273b2fafc889e7a5e3687a0dc2"),
+     "0xc316cefa3b21a5566f10c2a1b2e2f7fe2589e5c30de416460469400f52f8d21c"),
 ]
 
 PROJECT_ROOT = Path("/tmp/dhp")
