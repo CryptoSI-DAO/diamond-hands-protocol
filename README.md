@@ -10,9 +10,9 @@ A permissionless vault factory on **Base Network**. Any community can deploy a D
 
 | Network | Contract | Address | Verified |
 |---|---|---|---|
-| **Base Sepolia (testnet)** | DHPImplementation | [`0x562e…95f0f`](https://base-sepolia.blockscout.com/address/0xb9c96577fb259197a9728bb5bef1fd88baaea2dc) | ✅ Sourcify exact_match |
-| **Base Sepolia (testnet)** | DHPFeeCollector | [`0x11F4…D87C`](https://base-sepolia.blockscout.com/address/0xa4b62e787d88363374037c47dbb70f8d31fb6733) | ✅ Sourcify exact_match |
-| **Base Sepolia (testnet)** | DHPFactory | [`0xee1e…1273F`](https://base-sepolia.blockscout.com/address/0xae729f69b76f24a374fd6bfe8ac8ac3ab668fa0e) | ✅ Sourcify exact_match |
+| **Base Sepolia (testnet)** | DHPImplementation | [`0x562e…95f0f`](https://base-sepolia.blockscout.com/address/0xb44d4724092809c37eba61f822b6a8594cf7d975) | ✅ Sourcify exact_match |
+| **Base Sepolia (testnet)** | DHPFeeCollector | [`0x11F4…D87C`](https://base-sepolia.blockscout.com/address/0xc9368870739718972380b80eb9de157de51e39bd) | ✅ Sourcify exact_match |
+| **Base Sepolia (testnet)** | DHPFactory | [`0xee1e…1273F`](https://base-sepolia.blockscout.com/address/0x86fdfdcad0ee32c1aa39b8f9ce98e8dbad906c90) | ✅ Sourcify exact_match |
 
 **Mainnet: not yet deployed.** Awaiting audit + DAO multisig setup on Base.
 

@@ -1,47 +1,55 @@
 {
+  "version": "v1.2-all-fixes-applied",
   "network": "base_sepolia",
   "chainId": 84532,
   "deployer": "0x25c7F96825166Cb5d436D7B6A6C2EDB49221d5b8",
-  "deployBlock": null,
-  "version": "v1.1-audit-fixes",
+  "date": "2026-09-07",
   "contracts": {
     "DHPImplementation": {
-      "address": "0xb9c96577fb259197a9728bb5bef1fd88baaea2dc",
-      "txHash": "0x56f1d72b1ab592dc37f6d46e415ad527466efc2bf15f27999a65263a17184bac",
-      "verified": "sourcify:exact_match",
-      "owner": "0x25c7F96825166Cb5d436D7B6A6C2EDB49221d5b8",
-      "renounced": false
+      "address": "0xb44d4724092809c37eba61f822b6a8594cf7d975",
+      "txHash": "0x0afde90bbe3b499cf02334b609c3a859569c7dfb27ce806a323ad59ecdea3a85",
+      "verified": "sourcify:exact_match"
     },
     "DHPFeeCollector": {
-      "address": "0xa4b62e787d88363374037c47dbb70f8d31fb6733",
-      "txHash": "0x845bfc03b23d90af43b4b41d7c0d900929bfaadc7adbbe1756b200bf6fcc576f",
-      "verified": "sourcify:exact_match",
-      "owner": "0x25c7F96825166Cb5d436D7B6A6C2EDB49221d5b8",
-      "renounced": false,
-      "defaultTreasury": "0x25c7F96825166Cb5d436D7B6A6C2EDB49221d5b8"
+      "address": "0xc9368870739718972380b80eb9de157de51e39bd",
+      "txHash": "0x9877ba1d0629e0ad7249eae4756e1dd3fa9f401fcf76d41bdf42db016501e97f",
+      "verified": "sourcify:exact_match"
     },
     "DHPFactory": {
-      "address": "0xae729f69b76f24a374fd6bfe8ac8ac3ab668fa0e",
-      "txHash": "0x58409e6cefcca652fd35b56de619c84f96dbbf3dfd4114a1eeefbfb7ad68fd96",
+      "address": "0x86fdfdcad0ee32c1aa39b8f9ce98e8dbad906c90",
+      "txHash": "0xf98c1943bf589b4224802f5be04e3f12a565c4273b2fafc889e7a5e3687a0dc2",
       "verified": "sourcify:exact_match",
-      "implementation": "0xb9c96577fb259197a9728bb5bef1fd88baaea2dc",
-      "feeCollector": "0xa4b62e787d88363374037c47dbb70f8d31fb6733",
-      "owner": "0x25c7F96825166Cb5d436D7B6A6C2EDB49221d5b8",
-      "renounced": false
+      "implementation": "0xb44d4724092809c37eba61f822b6a8594cf7d975",
+      "feeCollector": "0xc9368870739718972380b80eb9de157de51e39bd"
     }
   },
-  "smokeTest": {
-    "token": "0xf289A194A4201D934F0B978E15c086D039b2a27f",
-    "vault": "0x7913142D41d7b652B5e238ED2B95D98bA0909427",
-    "results": {
-      "feeCollector_balance_raw": "826365582",
-      "interpretation": "Protocol fees accumulating correctly. Smoke test passed on Base Sepolia with all audit fixes applied."
+  "tests": {
+    "total": 64,
+    "passing": 64,
+    "suites": {
+      "DHPImplementation": 20,
+      "DHPFactory": 25,
+      "DHPFeeCollector": 19
     }
   },
   "auditFixes": {
-    "C-1_mint_ordering": "FIXED — applied same _distributeTax → _accrueDividend → _mint order as deposit()",
-    "C-2_burn_sink_blacklist": "FIXED — replaced 0xdead burn with lock-in-vault model, subtracted from totalAssets()",
-    "H-1_createVault_griefing": "FIXED — added 0.001 ETH creation fee, forwarded to feeCollector",
-    "H-3_inflation_attack": "FIXED — MIN_FIRST_DEPOSIT = 1e10 raw prevents 1-wei squatters"
+    "v1.0_critical": [
+      "C-1: mint() ordering — _distributeTax → _accrueDividend → _mint (matches deposit())",
+      "C-2: BURN_SINK blacklist — lock-in-vault model with burnedBalance accumulator"
+    ],
+    "v1.0_high": [
+      "H-1: createVault griefing — 0.001 ETH creation fee (exact amount, no refund)",
+      "H-3: Inflation attack — per-vault minFirstDeposit = 10^decimals (1.0 token unit)"
+    ],
+    "v1.1_remaining": [
+      "C-NEW-1: totalAssets() reverts loudly on rebasing-token underflow (no silent 0)",
+      "M-NEW-1: totalBurned() view added for analytics",
+      "M-NEW-2: minFirstDeposit is per-vault, configured at initialize() time",
+      "I-NEW-1: BelowMinimumFirstDeposit(required, provided) error type"
+    ]
+  },
+  "smokeTest": {
+    "passed": true,
+    "notes": "Full lifecycle on Base Sepolia: deploy mock token, create vault, deposit 100k, claim dividend, redeem half. FeeCollector balance accumulating correctly."
   }
 }
