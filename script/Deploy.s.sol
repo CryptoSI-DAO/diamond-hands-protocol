@@ -81,7 +81,8 @@ contract DeploySmokeTest is Script {
         DHPFactory.TaxConfig memory cfg = DHPFactory.TaxConfig({
             entryTaxBps: 500,
             exitTaxBps: 1_000,
-            dividendShareBps: 7_000
+            dividendShareBps: 7_000,
+            acceptFeesFromTransfer: false
         });
         address vault = f.createVault(testToken, cfg);
         console2.log("Smoke-test vault deployed at:", vault);

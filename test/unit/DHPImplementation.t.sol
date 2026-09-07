@@ -57,7 +57,8 @@ contract DHPImplementationTest is Test {
         DHPFactory.TaxConfig memory cfg = DHPFactory.TaxConfig({
             entryTaxBps: ENTRY_TAX,
             exitTaxBps: EXIT_TAX,
-            dividendShareBps: DIV_SHARE
+            dividendShareBps: DIV_SHARE,
+            acceptFeesFromTransfer: false
         });
         uint256 creationFee = factory.VAULT_CREATION_FEE();
         vault = DHPImplementation(factory.createVault{value: creationFee}(address(token), cfg));
@@ -315,7 +316,8 @@ contract DHPImplementationTest is Test {
         DHPFactory.TaxConfig memory cfg = DHPFactory.TaxConfig({
             entryTaxBps: 100,
             exitTaxBps: 100,
-            dividendShareBps: 7_000
+            dividendShareBps: 7_000,
+            acceptFeesFromTransfer: false
         });
         uint256 creationFee = factory.VAULT_CREATION_FEE();
         address fotVault = factory.createVault{value: creationFee}(address(fot), cfg);
@@ -447,6 +449,132 @@ contract DHPImplementationTest is Test {
         // totalAssets() should now REVERT, not silently return 0.
         vm.expectRevert("DHP: token balance below burn accumulator (rebase or accounting issue)");
         v.totalAssets();
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // v1.2.1 audit-fix tests (M-CARRIED-1 + M-CARRIED-2)
+    // ──────────────────────────────────────────────────────────────────────────
+
+    function test_accept_fees_from_transfer_flag_default_false() public {
+        // M-CARRIED-1: verify default mode is strict (rejects FOT tokens).
+        assertFalse(vault.acceptFeesFromTransfer(), "default is strict mode");
+    }
+
+    function test_claim_dividend_with_min_amount_out_succeeds() public {
+        // M-CARRIED-2: slippage protection on claimDividend.
+        vm.prank(alice);
+        v.deposit(10_000e8, alice);
+        vm.prank(bob);
+        v.deposit(20_000e8, bob);
+
+        uint256 expected = pending(alice);
+        assertGt(expected, 0, "alice has pending");
+
+        // Pass a low minAmountOut — should succeed.
+        vm.prank(alice);
+        uint256 paid = v.claimDividend(0);
+        assertEq(paid, expected, "claim with min=0 succeeds and pays full amount");
+    }
+
+    function test_claim_dividend_with_too_high_min_amount_out_reverts() public {
+        // M-CARRIED-2: protection against sandwich attacks — if minAmountOut
+        // is higher than the actual pending, the claim reverts. Front-runner
+        // can't make the user accept less than they wanted.
+        vm.prank(alice);
+        v.deposit(10_000e8, alice);
+        vm.prank(bob);
+        v.deposit(20_000e8, bob);
+
+        uint256 expected = pending(alice);
+        assertGt(expected, 0, "alice has pending");
+
+        // Try to claim with min > actual — should revert.
+        vm.prank(alice);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                DHPImplementation.InsufficientClaimAmount.selector,
+                expected + 1,
+                expected
+            )
+        );
+        v.claimDividend(expected + 1);
+    }
+
+    function test_claim_dividend_overload_still_works() public {
+        // M-CARRIED-2: backwards compatibility — the old `claimDividend()` (no
+        // args) still works. It's equivalent to `claimDividend(0)`.
+        vm.prank(alice);
+        v.deposit(10_000e8, alice);
+        vm.prank(bob);
+        v.deposit(20_000e8, bob);
+
+        uint256 balBefore = token.balanceOf(alice);
+        uint256 expected = pending(alice);
+
+        vm.prank(alice);
+        uint256 paid = v.claimDividend();
+        assertEq(paid, expected, "no-arg overload still pays full amount");
+        assertEq(token.balanceOf(alice) - balBefore, expected, "alice receives exact amount");
+    }
+
+    function test_accept_fees_from_transfer_true_accepts_fot() public {
+        // M-CARRIED-1: when a vault is created with `acceptFeesFromTransfer=true`,
+        // the anti-FOT balance check is bypassed. FOT tokens can be deposited.
+        MockERC20 fot = new MockERC20("FOT", "FOT", 18);
+        fot.setFee(500); // 5% FOT
+
+        DHPFactory.TaxConfig memory cfg = DHPFactory.TaxConfig({
+            entryTaxBps: 100,
+            exitTaxBps: 100,
+            dividendShareBps: 7_000,
+            acceptFeesFromTransfer: true  // <-- the new flag
+        });
+        uint256 creationFee = factory.VAULT_CREATION_FEE();
+        address fotVault = factory.createVault{value: creationFee}(address(fot), cfg);
+
+        assertTrue(
+            DHPImplementation(fotVault).acceptFeesFromTransfer(),
+            "vault is in permissive mode"
+        );
+
+        fot.mint(alice, 1_000e18);
+        vm.prank(alice);
+        fot.approve(fotVault, type(uint256).max);
+
+        // In permissive mode, deposit should succeed even though the token
+        // takes a 5% fee on transfer.
+        vm.prank(alice);
+        uint256 shares = IDHPVault(fotVault).deposit(100e18, alice);
+        assertGt(shares, 0, "FOT deposit succeeds in permissive mode");
+    }
+
+    function test_accept_fees_from_transfer_false_rejects_fot() public {
+        // M-CARRIED-1 (control): in strict mode (default), FOT tokens are
+        // rejected (revert with FeeOnTransferToken).
+        MockERC20 fot = new MockERC20("FOT", "FOT", 18);
+        fot.setFee(500); // 5% FOT
+
+        DHPFactory.TaxConfig memory cfg = DHPFactory.TaxConfig({
+            entryTaxBps: 100,
+            exitTaxBps: 100,
+            dividendShareBps: 7_000,
+            acceptFeesFromTransfer: false  // <-- strict mode (default)
+        });
+        uint256 creationFee = factory.VAULT_CREATION_FEE();
+        address fotVault = factory.createVault{value: creationFee}(address(fot), cfg);
+
+        assertFalse(
+            DHPImplementation(fotVault).acceptFeesFromTransfer(),
+            "vault is in strict mode"
+        );
+
+        fot.mint(alice, 1_000e18);
+        vm.prank(alice);
+        fot.approve(fotVault, type(uint256).max);
+
+        vm.prank(alice);
+        vm.expectRevert();
+        IDHPVault(fotVault).deposit(100e18, alice);
     }
 
     // ──────────────────────────────────────────────────────────────────────────

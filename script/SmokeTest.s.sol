@@ -40,7 +40,8 @@ contract SmokeTest is Script {
         DHPFactory.TaxConfig memory cfg = DHPFactory.TaxConfig({
             entryTaxBps: 500,
             exitTaxBps: 1_000,
-            dividendShareBps: 7_000
+            dividendShareBps: 7_000,
+            acceptFeesFromTransfer: false
         });
         address vaultAddr = f.createVault{value: f.VAULT_CREATION_FEE()}(address(token), cfg);
         IDHPVault vault = IDHPVault(vaultAddr);

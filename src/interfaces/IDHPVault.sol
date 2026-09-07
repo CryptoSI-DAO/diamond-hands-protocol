@@ -81,8 +81,20 @@ interface IDHPVault {
 
     /// @notice Claim pending dividends for `msg.sender`. Pays out in the
     ///         underlying token (not shares).
+    /// @param  minAmountOut  Slippage protection: reverts if the actual
+    ///         amount is less than this. Pass 0 to skip the check.
+    /// @return amount The amount of underlying transferred to the caller.
+    function claimDividend(uint256 minAmountOut) external returns (uint256 amount);
+
+    /// @notice Backwards-compatible overload (no slippage protection).
     /// @return amount The amount of underlying transferred to the caller.
     function claimDividend() external returns (uint256 amount);
+
+    /// @notice If true, the vault accepts tokens with FOT/hook behaviour
+    ///         (rebasing, gas-burn, marketing-fee). When false (default),
+    ///         the vault reverts on any transfer that doesn't deliver the
+    ///         full requested amount. (v1.2.1, M-CARRIED-1.)
+    function acceptFeesFromTransfer() external view returns (bool);
 
     // ──────────────────────────────────────────────────────────────────────────
     // ERC-4626 preview helpers (mirror ERC4626 semantics; previews already net

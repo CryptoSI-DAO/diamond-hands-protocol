@@ -86,7 +86,8 @@ contract DHPFactoryTest is Test {
         return DHPFactory.TaxConfig({
             entryTaxBps: 500,
             exitTaxBps: 1_000,
-            dividendShareBps: 7_000
+            dividendShareBps: 7_000,
+            acceptFeesFromTransfer: false
         });
     }
 
@@ -183,7 +184,8 @@ contract DHPFactoryTest is Test {
         DHPFactory.TaxConfig memory cfg = DHPFactory.TaxConfig({
             entryTaxBps: 0,
             exitTaxBps: 0,
-            dividendShareBps: 0
+            dividendShareBps: 0,
+            acceptFeesFromTransfer: false
         });
         address v = _createVaultWithFee(address(tokenA), cfg);
         assertTrue(v != address(0));
@@ -194,7 +196,8 @@ contract DHPFactoryTest is Test {
         DHPFactory.TaxConfig memory cfg = DHPFactory.TaxConfig({
             entryTaxBps: 1_000,
             exitTaxBps: 2_500,
-            dividendShareBps: 9_000
+            dividendShareBps: 9_000,
+            acceptFeesFromTransfer: false
         });
         address v = _createVaultWithFee(address(tokenA), cfg);
         assertTrue(v != address(0));

@@ -104,6 +104,9 @@ contract DHPFactory is Ownable2Step, ReentrancyGuardTransient {
         uint16 entryTaxBps;
         uint16 exitTaxBps;
         uint16 dividendShareBps;
+        /// @dev v1.2.1: If true, the vault accepts tokens with FOT/hook behaviour
+        ///      (rebasing, gas-burn, marketing-fee). Default: false.
+        bool acceptFeesFromTransfer;
     }
 
     // ──────────────────────────────────────────────────────────────────────────
@@ -220,7 +223,13 @@ contract DHPFactory is Ownable2Step, ReentrancyGuardTransient {
         // ensures the inflation-attack guard is meaningful for all decimal
         // configurations (1.0 SPX for 6-decimal tokens, 1.0 wstETH for
         // 18-decimal tokens). See audit finding M-NEW-2.
+        //
+        // v1.2.1: `acceptFeesFromTransfer` is exposed as a per-vault flag
+        // (audit M-CARRIED-1: previously, tokens with legitimate hooks were
+        // rejected). Default: false (strict mode, rejects FOT tokens).
+        // Factory owner can set true for known-hook tokens.
         uint256 minFirstDeposit = 10 ** IERC20Metadata(token).decimals();
+        bool acceptFeesFromTransfer = cfg.acceptFeesFromTransfer;
         vault = implementation.clone();
         DHPImplementation(payable(vault)).initialize(
             IERC20(token),
@@ -228,7 +237,8 @@ contract DHPFactory is Ownable2Step, ReentrancyGuardTransient {
             cfg.entryTaxBps,
             cfg.exitTaxBps,
             cfg.dividendShareBps,
-            minFirstDeposit
+            minFirstDeposit,
+            acceptFeesFromTransfer
         );
 
         // Register.

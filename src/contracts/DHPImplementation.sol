@@ -145,6 +145,7 @@ contract DHPImplementation is ERC20, ReentrancyGuardTransient, Pausable, Ownable
     error ZeroAmount();
     error NoPendingDividend();
     error BelowMinimumFirstDeposit(uint256 required, uint256 provided);
+    error InsufficientClaimAmount(uint256 requested, uint256 available);
 
     // ──────────────────────────────────────────────────────────────────────────
     // Modifiers
@@ -173,13 +174,16 @@ contract DHPImplementation is ERC20, ReentrancyGuardTransient, Pausable, Ownable
     /// @param minFirstDeposit_  Per-vault minimum first deposit in raw token
     ///                          units. Prevents 1-wei squat attacks on vaults
     ///                          for tokens with high decimals (see M-NEW-2).
+    /// @param acceptFeesFromTransfer_ If true, accept tokens with FOT/hook
+    ///                          behaviour. (v1.2.1, M-CARRIED-1.)
     function initialize(
         IERC20 token_,
         address feeCollector_,
         uint16 entryTaxBps_,
         uint16 exitTaxBps_,
         uint16 dividendShareBps_,
-        uint256 minFirstDeposit_
+        uint256 minFirstDeposit_,
+        bool acceptFeesFromTransfer_
     ) external {
         if (_vaultInitialised) revert AlreadyInitialised();
         if (address(token_) == address(0) || feeCollector_ == address(0)) revert ZeroAddress();
@@ -195,6 +199,7 @@ contract DHPImplementation is ERC20, ReentrancyGuardTransient, Pausable, Ownable
         dividendShareBps = dividendShareBps_;
         _assetToken = token_;
         minFirstDeposit = minFirstDeposit_;
+        acceptFeesFromTransfer = acceptFeesFromTransfer_;
 
         // Build vault-specific ERC-20 metadata (name + symbol).
         string memory underlyingSym = IERC20Metadata(address(token_)).symbol();
@@ -256,6 +261,15 @@ contract DHPImplementation is ERC20, ReentrancyGuardTransient, Pausable, Ownable
     ///      for the token's decimals. (Audit finding M-NEW-2: a single constant
     ///      is vulnerable for 18-decimal tokens where 1e10 raw = $0.00004.)
     uint256 public minFirstDeposit;
+
+    /// @dev If true, the vault accepts tokens with `safeTransfer`/`safeTransferFrom`
+    ///      hooks that deduct a small fee (FOT) or perform other balance mutations
+    ///      (rebasing, gas-burn, etc.). When false (the default), the vault reverts
+    ///      on any transfer that doesn't deliver the full requested amount. (v1.2.1
+    ///      fix for audit M-CARRIED-1: previously, the anti-FOT check rejected
+    ///      tokens with legitimate hooks like rebasing or marketing-fee tokens.
+    ///      Factory owners can now opt in to a permissive mode per vault.)
+    bool public acceptFeesFromTransfer;
 
     // ──────────────────────────────────────────────────────────────────────────
     // ERC-4626 share accounting (re-implemented; not inherited)
@@ -354,12 +368,14 @@ contract DHPImplementation is ERC20, ReentrancyGuardTransient, Pausable, Ownable
         uint256 net = assets - tax;
 
         // Anti-FOT: pull the full `assets` from the user, then verify the
-        // vault received exactly `assets`. Anything less means the token
-        // deducted a fee and we revert.
+        // vault received exactly `assets` (unless `acceptFeesFromTransfer`
+        // is set, in which case FOT/hook tokens are accepted). The check
+        // uses balanceOf to catch any token behaviour that reduces the
+        // amount received, including FOT, rebasing, or gas-burn hooks.
         uint256 preBal = _assetToken.balanceOf(address(this));
         _assetToken.safeTransferFrom(msg.sender, address(this), assets);
         uint256 postBal = _assetToken.balanceOf(address(this));
-        if (postBal - preBal != assets) revert FeeOnTransferToken();
+        if (!acceptFeesFromTransfer && postBal - preBal != assets) revert FeeOnTransferToken();
 
         // Dividend accounting: send fee+burn out first so totalAssets is correct,
         // then accrue the dividend index (using pre-mint supply), then mint shares
@@ -403,7 +419,7 @@ contract DHPImplementation is ERC20, ReentrancyGuardTransient, Pausable, Ownable
         uint256 preBal = _assetToken.balanceOf(address(this));
         _assetToken.safeTransferFrom(msg.sender, address(this), assets);
         uint256 postBal = _assetToken.balanceOf(address(this));
-        if (postBal - preBal != assets) revert FeeOnTransferToken();
+        if (!acceptFeesFromTransfer && postBal - preBal != assets) revert FeeOnTransferToken();
 
         // Mirror deposit() order: distribute tax → accrue dividend → mint.
         // Distributing tax first means the user pays the post-distribute
@@ -456,7 +472,7 @@ contract DHPImplementation is ERC20, ReentrancyGuardTransient, Pausable, Ownable
         uint256 preBal = _assetToken.balanceOf(receiver);
         _assetToken.safeTransfer(receiver, assets);
         uint256 postBal = _assetToken.balanceOf(receiver);
-        if (postBal - preBal != assets) revert FeeOnTransferToken();
+        if (!acceptFeesFromTransfer && postBal - preBal != assets) revert FeeOnTransferToken();
 
         // Dividend accrual + tax distribution happen AFTER the burn + transfer so
         // totalAssets() reflects the post-exit vault state (fee + burn sent out,
@@ -493,7 +509,7 @@ contract DHPImplementation is ERC20, ReentrancyGuardTransient, Pausable, Ownable
         uint256 preBal = _assetToken.balanceOf(receiver);
         _assetToken.safeTransfer(receiver, assets);
         uint256 postBal = _assetToken.balanceOf(receiver);
-        if (postBal - preBal != assets) revert FeeOnTransferToken();
+        if (!acceptFeesFromTransfer && postBal - preBal != assets) revert FeeOnTransferToken();
 
         // Tax distribution + dividend accrual happen AFTER the burn + transfer.
         _distributeTax(tax);
@@ -559,16 +575,32 @@ contract DHPImplementation is ERC20, ReentrancyGuardTransient, Pausable, Ownable
     }
 
     /// @inheritdoc IDHPVault
-    function claimDividend() external override nonReentrant returns (uint256 amount) {
+    /// @dev v1.2.1: accepts a minAmountOut slippage parameter to protect
+    ///      against sandwich attacks. The dividend index is set BEFORE
+    ///      every share-changing operation, but a user could still be
+    ///      front-run by another claimer who changes the rpTs, so the
+    ///      minAmountOut acts as a backstop. (Audit M-CARRIED-2.)
+    function claimDividend(uint256 minAmountOut) public override nonReentrant returns (uint256 amount) {
         _settleDividend(msg.sender);
         amount = rewards[msg.sender];
         if (amount == 0) revert NoPendingDividend();
+        if (amount < minAmountOut) revert InsufficientClaimAmount(minAmountOut, amount);
         rewards[msg.sender] = 0;
         uint256 preBal = _assetToken.balanceOf(msg.sender);
         _assetToken.safeTransfer(msg.sender, amount);
         uint256 postBal = _assetToken.balanceOf(msg.sender);
-        if (postBal - preBal != amount) revert FeeOnTransferToken();
+        if (!acceptFeesFromTransfer && postBal - preBal != amount) revert FeeOnTransferToken();
         emit DividendClaimed(msg.sender, amount);
+    }
+
+    /// @inheritdoc IDHPVault
+    /// @dev Backwards-compatible overload that uses no slippage protection.
+    ///      (For v1.2.1+ users, prefer claimDividend(minAmountOut).)
+    ///      Note: this overload just calls the new one with 0. We don't
+    ///      need the nonReentrant modifier on this one because the inner
+    ///      call has it.
+    function claimDividend() external override returns (uint256 amount) {
+        return claimDividend(0);
     }
 
     /// @notice Total tokens burned (lock-in-vault accumulator). The amount of
