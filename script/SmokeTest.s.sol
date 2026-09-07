@@ -35,14 +35,14 @@ contract SmokeTest is Script {
         SmokeTestToken token = new SmokeTestToken();
         console2.log("SmokeTestToken:", address(token));
 
-        // 2. Create a vault for it.
+        // 2. Create a vault for it (pays 0.001 ETH creation fee, fixes H-1).
         DHPFactory f = DHPFactory(factoryAddr);
         DHPFactory.TaxConfig memory cfg = DHPFactory.TaxConfig({
             entryTaxBps: 500,
             exitTaxBps: 1_000,
             dividendShareBps: 7_000
         });
-        address vaultAddr = f.createVault(address(token), cfg);
+        address vaultAddr = f.createVault{value: f.VAULT_CREATION_FEE()}(address(token), cfg);
         IDHPVault vault = IDHPVault(vaultAddr);
         console2.log("Vault:", vaultAddr);
 
@@ -82,7 +82,7 @@ contract SmokeTest is Script {
         console2.log("After redeem:");
         console2.log("  assets received:", received);
         console2.log("  vault balance:", token.balanceOf(vaultAddr));
-        console2.log("  feeCollector balance:", token.balanceOf(0x11F41D72E8e612b94b831Df38B12F5Bc3D58D87C));
+        console2.log("  feeCollector balance:", token.balanceOf(vm.envAddress("DHP_FEE_COLLECTOR_BASE_SEPOLIA")));
 
         vm.stopBroadcast();
 
