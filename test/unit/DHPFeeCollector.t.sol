@@ -188,11 +188,9 @@ contract DHPFeeCollectorTest is Test {
     // Hook (informational event)
     // ──────────────────────────────────────────────────────────────────────────
 
-    function test_on_fee_received_emits_event() public {
-        vm.expectEmit(true, false, false, true);
-        emit DHPFeeCollector.FeeReceived(address(token), 42);
-        collector.onFeeReceived(address(token), 42);
-    }
+    // (v1.2.2) test_on_fee_received_emits_event removed with the function
+    // itself — audit I-NEW-1: onFeeReceived()/FeeReceived were dead surface;
+    // vaults transfer directly and anyone could emit fake fee events.
 
     function test_pending_balance_view() public {
         _fund(123e18);

@@ -202,13 +202,10 @@ contract DHPFactory is Ownable2Step, ReentrancyGuardTransient {
         // Validate the token's `decimals()` return. We require a sane answer
         // between minDecimals and maxDecimals (default [0, 18]). Tokens that
         // revert or return something out-of-range are rejected here.
+        // (v1.2.2: the dead empty `assembly {}` block that used to sit here —
+        // v1.0 audit M-3 — has been removed; the try/catch below is the
+        // actual implementation.)
         uint8 dec;
-        // solhint-disable-next-line no-inline-assembly
-        assembly {
-            // Try a static call to decimals(); on failure leave dec = 0xff.
-            // We can't easily catch the revert inline without try/catch, so
-            // we fall back to try/catch in Solidity below.
-        }
         try IERC20Metadata(token).decimals() returns (uint8 d) {
             dec = d;
         } catch {

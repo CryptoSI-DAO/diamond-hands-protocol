@@ -6,7 +6,6 @@ import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IER
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
-import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
@@ -33,16 +32,23 @@ import {IDHPVault} from "../interfaces/IDHPVault.sol";
 ///           delta equals the expected pre-tax amount. Tokens with
 ///           fee-on-transfer, rebasing, or transfer hooks cannot pass.
 ///         - No admin functions on the vault. The factory is `Ownable` and
-///           gets renounced post-launch. `Pausable` is exposed but only the
-///           factory owner can pause/unpause; after factory renounce, the
-///           pause capability becomes inert.
+///           gets renounced post-launch.
+///
+///         Reentrancy note (v1.2.2): the underlying (asset) token and the
+///         share token (this ERC-20) are DIFFERENT contracts. A malicious
+///         asset token re-entering during `_distributeTax` or transfer hooks
+///         holds no shares and no settled rewards, so every re-entry path is
+///         inert. This separation is what makes per-function `nonReentrant`
+///         sufficient — do not "simplify" the two-token split away.
 ///
 ///         Share accounting follows the standard ERC-4626 formula, but the
 ///         deposit/withdraw entry-points apply tax first and then mint/burn
 ///         shares off the net amount. We intentionally do NOT inherit ERC4626
 ///         directly because OZ v5 makes the underlying immutable at deploy
-///         time, which doesn't fit our per-token-clone model.
-contract DHPImplementation is ERC20, ReentrancyGuardTransient, Pausable, Ownable, IDHPVault {
+///         time, which doesn't fit our per-token-clone model. Divergences
+///         from the ERC-4626 surface are enumerated in
+///         `ERC4626_COMPATIBILITY.md`.
+contract DHPImplementation is ERC20, ReentrancyGuardTransient, Ownable, IDHPVault {
     using SafeERC20 for IERC20;
 
     // ──────────────────────────────────────────────────────────────────────────
@@ -55,15 +61,11 @@ contract DHPImplementation is ERC20, ReentrancyGuardTransient, Pausable, Ownable
     uint16 internal constant PROTOCOL_FEE_BPS = 50;      // 0.5%
     uint16 internal constant MAX_DIVIDEND_SHARE_BPS = 9_000; // 90%
 
-    /// @dev The burn sink is `address(0xdead)`. Many major tokens (USDT, USDC,
-    ///      BUSD) blacklist this address to prevent "proof-of-burn" attacks,
-    ///      which would DoS the protocol on any token with blacklist hooks.
-    ///      We keep the constant for reference but the actual burn mechanism
-    ///      is the "lock-in-vault" model below (tracked in `burnedBalance`,
-    ///      subtracted from `totalAssets()` for share-price math, but never
-    ///      leaves the vault). See `_distributeTax` for the implementation.
-    address internal constant BURN_SINK = address(0xdead);
-
+    /// @dev The burn mechanism is the "lock-in-vault" model (tracked in
+    ///      `burnedBalance`, subtracted from `totalAssets()` for share-price
+    ///      math, but never leaves the vault). See `_distributeTax` for the
+    ///      implementation. (The original `0x…dEaD` BURN_SINK constant was
+    ///      removed in v1.2.2 — git history preserves it.)
     /// @dev Precision scale for `rewardPerTokenStored`.
     uint256 internal constant PRECISION = 1e18;
     // ──────────────────────────────────────────────────────────────────────────
@@ -146,6 +148,12 @@ contract DHPImplementation is ERC20, ReentrancyGuardTransient, Pausable, Ownable
     error NoPendingDividend();
     error BelowMinimumFirstDeposit(uint256 required, uint256 provided);
     error InsufficientClaimAmount(uint256 requested, uint256 available);
+    /// @dev (v1.2.2, audit L-NEW-1) Raised when share pricing is requested
+    ///      while the vault holds shares but zero net assets. Previously this
+    ///      state silently priced shares 1:1 against the raw balance (which is
+    ///      exactly `burnedBalance` there), enabling redemptions out of the
+    ///      locked burn tokens.
+    error DegenerateVaultState();
 
     // ──────────────────────────────────────────────────────────────────────────
     // Modifiers
@@ -164,7 +172,13 @@ contract DHPImplementation is ERC20, ReentrancyGuardTransient, Pausable, Ownable
     ///      — it is only used as init-code for clones. Clones bypass the
     ///      constructor via delegatecall; their configuration is set in
     ///      `initialize()` below.
-    constructor() ERC20("Diamond Hands Implementation", "DHPi") Ownable(msg.sender) {}
+    constructor() ERC20("Diamond Hands Implementation", "DHPi") Ownable(msg.sender) {
+        // (v1.2.2, audit I-NEW-2) Pre-mark the implementation as initialised
+        // so `initialize()` can never run on it directly (which would let a
+        // third party set itself as factory and strand tokens sent here by
+        // mistake). Clones are unaffected: their storage slot starts fresh.
+        _vaultInitialised = true;
+    }
 
     // ──────────────────────────────────────────────────────────────────────────
     // Initialisation
@@ -214,11 +228,6 @@ contract DHPImplementation is ERC20, ReentrancyGuardTransient, Pausable, Ownable
         return _assetToken;
     }
 
-    /// @inheritdoc IDHPVault
-    function totalAssetsAfterTax() external view override returns (uint256) {
-        return _assetToken.balanceOf(address(this));
-    }
-
     /// @notice Vault name = "Diamond Hands {UNDERLYING_SYMBOL}".
     /// @dev    Override of OZ v5 ERC20.name(). The base `_name` storage is
     ///         unreachable (private), so we mirror it here.
@@ -231,12 +240,12 @@ contract DHPImplementation is ERC20, ReentrancyGuardTransient, Pausable, Ownable
         return _vaultSymbol;
     }
 
-    /// @notice Total assets currently managed by the vault.
+    /// @notice Total assets currently managed by the vault, net of burned tokens.
     /// @dev    For the per-vault case this equals the underlying token balance
     ///         held by the contract MINUS the burned (locked-in-vault) balance.
     ///         This is what backs the outstanding share supply: the share
-    ///         price is `(totalAssets - burnedBalance) / totalSupply`. Tokens
-    ///         in `burnedBalance` are effectively removed from circulation
+    ///         price is `(totalAssets) / totalSupply`. Tokens in
+    ///         `burnedBalance` are effectively removed from circulation
     ///         but stay in this contract (no external burn address required,
     ///         so the protocol works on tokens that blacklist 0x…dEaD).
     /// @dev    For rebasing tokens (stETH, AMPL, etc.), `balanceOf` can drop
@@ -245,6 +254,10 @@ contract DHPImplementation is ERC20, ReentrancyGuardTransient, Pausable, Ownable
     ///         0 would silently make all shares appear worthless and let
     ///         griefers steal value. Loud revert is the safer failure mode —
     ///         off-chain indexers see the failure and can alert the team.
+    /// @dev    (v1.2.2) The old `totalAssetsAfterTax()` view — which returned
+    ///         the raw balance INCLUDING burned tokens — was removed: it
+    ///         contradicted `totalAssets()` and trapped integrators into
+    ///         publishing inflated numbers. (Audit L-NEW-3.)
     function totalAssets() public view returns (uint256) {
         uint256 bal = _assetToken.balanceOf(address(this));
         require(
@@ -279,10 +292,18 @@ contract DHPImplementation is ERC20, ReentrancyGuardTransient, Pausable, Ownable
     ///      `assets` is the gross deposit amount. Net assets entering the
     ///      vault (post-tax) are minted 1:1 to shares on first deposit;
     ///      subsequent deposits use the running exchange rate.
+    /// @dev  (v1.2.2, audit L-NEW-1) The 1:1 fallback now applies ONLY when
+    ///      `supply == 0` (truly empty vault). The old `assets == 0` half of
+    ///      the guard also fired when supply > 0 but the balance had been
+    ///      eaten down to the burned accumulator — a degenerate state in
+    ///      which 1:1 pricing would let redemptions eat the locked (burned)
+    ///      tokens and then permanently revert `totalAssets()` for everyone.
+    ///      That state now reverts loudly instead.
     function _convertToShares(uint256 netAssets, bool roundingUp) internal view returns (uint256) {
         uint256 supply = totalSupply();
         uint256 assets = totalAssets();
-        if (supply == 0 || assets == 0) return netAssets;
+        if (supply == 0) return netAssets;
+        if (assets == 0) revert DegenerateVaultState();
         uint256 numerator = netAssets * supply;
         uint256 quotient = numerator / assets;
         if (roundingUp && numerator % assets > 0) quotient += 1;
@@ -293,7 +314,8 @@ contract DHPImplementation is ERC20, ReentrancyGuardTransient, Pausable, Ownable
     function _convertToAssets(uint256 shares, bool roundingUp) internal view returns (uint256) {
         uint256 supply = totalSupply();
         uint256 assets = totalAssets();
-        if (supply == 0 || assets == 0) return shares;
+        if (supply == 0) return shares;
+        if (assets == 0) revert DegenerateVaultState();
         uint256 numerator = shares * assets;
         uint256 quotient = numerator / supply;
         if (roundingUp && numerator % supply > 0) quotient += 1;
@@ -346,7 +368,6 @@ contract DHPImplementation is ERC20, ReentrancyGuardTransient, Pausable, Ownable
         public
         override
         nonReentrant
-        whenNotPaused
         returns (uint256 shares)
     {
         if (assets == 0) revert ZeroAmount();
@@ -395,7 +416,6 @@ contract DHPImplementation is ERC20, ReentrancyGuardTransient, Pausable, Ownable
         public
         override
         nonReentrant
-        whenNotPaused
         returns (uint256 assets)
     {
         if (shares == 0) revert ZeroAmount();
@@ -537,6 +557,10 @@ contract DHPImplementation is ERC20, ReentrancyGuardTransient, Pausable, Ownable
 
     /// @dev Bump `rewardPerTokenStored` by `taxAmount * 1e18 / totalSupply`.
     ///      Called immediately after every deposit/withdraw that took tax.
+    ///      (v1.2.2, audit I-NEW-5) The division floors, so up to
+    ///      `supply - 1` wei of each tax event's dividend portion is
+    ///      index-dust that stays backing shares — standard Synthetix
+    ///      StakingRewards behaviour, immaterial by design.
     function _accrueDividend(uint256 taxAmount) internal {
         uint256 dividendPortion = (taxAmount * dividendShareBps) / BPS;
         uint256 supply = totalSupply();
@@ -622,16 +646,13 @@ contract DHPImplementation is ERC20, ReentrancyGuardTransient, Pausable, Ownable
     }
 
     // ──────────────────────────────────────────────────────────────────────────
-    // Pausable (only factory owner, post-renounce inert)
+    // (v1.2.2) pause()/unpause() REMOVED — audit I-NEW-1, carried L-CARRIED-1.
+    // They were dead code since v1.0: gated `onlyFactory`, but the factory
+    // never had a function that called them, so no vault could ever be
+    // paused. The vault has no admin surface; if a pause story is wanted in
+    // the future it belongs in the factory (`pauseVault(token)`) with all the
+    // governance tradeoffs that implies.
     // ──────────────────────────────────────────────────────────────────────────
-
-    function pause() external onlyFactory {
-        _pause();
-    }
-
-    function unpause() external onlyFactory {
-        _unpause();
-    }
 
     // ──────────────────────────────────────────────────────────────────────────
     // ERC-20 overrides — update dividend accounting on every transfer

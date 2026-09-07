@@ -84,7 +84,8 @@ Smoke-test tx hashes and on-chain evidence are in `deployments.json`.
 - [ ] Final testnet rehearsal after audit findings integrated
 - [ ] Deploy to Base mainnet at known deterministic addresses (CREATE deterministic — same deployer + nonce ⇒ same address on every chain)
 - [ ] Verify all 3 contracts on Base mainnet Sourcify (same script, swap chainId 8453 for 84532)
-- [ ] Renounce factory + feeCollector ownership to DAO multisig (or per launch plan)
+- [ ] Renounce FACTORY ownership (safe — only gates `setVerified` curation)
+- [ ] Transfer FeeCollector ownership to DAO multisig — **NEVER renounce the collector** (sweep is `onlyOwner`; renouncing permanently locks all future protocol fees — v1.2.2 audit M-NEW-1)
 - [ ] Publish audit report and findings response
 
 ---

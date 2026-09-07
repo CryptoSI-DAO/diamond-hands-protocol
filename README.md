@@ -2,38 +2,63 @@
 
 > *Paper hands fund diamond hands. On-chain. Forever.*
 
-**Current version: v1.2.1** — 0 critical / 0 high / 0 medium findings (4 self-audit passes complete). Ready for external audit.
+**Current version: v1.2.2** — 0 critical / 0 high / 1 low-medium governance finding closed by documentation (5 self-audit passes complete). Ready for external audit.
 
-[📄 **Latest self-audit: `SELF_AUDIT_V1.2.1.md`**](https://github.com/CryptoSI-DAO/diamond-hands-protocol/blob/feat/v1-core-contracts/SELF_AUDIT_V1.2.1.md) · [🔒 SECURITY.md](https://github.com/CryptoSI-DAO/diamond-hands-protocol/blob/feat/v1-core-contracts/SECURITY.md) · [📋 AUDIT_SCOPE.md](https://github.com/CryptoSI-DAO/diamond-hands-protocol/blob/feat/v1-core-contracts/AUDIT_SCOPE.md)
+[📄 **Latest self-audit: `SELF_AUDIT_V1.2.2.md`**](SELF_AUDIT_V1.2.2.md) · [🔒 SECURITY.md](SECURITY.md) · [📋 AUDIT_SCOPE.md](AUDIT_SCOPE.md) · [🔗 ERC-4626 compatibility](ERC4626_COMPATIBILITY.md)
 
 ---
 
-## 📍 Live deployments (Base Sepolia testnet, v1.2.1)
+## 📍 Live deployments (Base Sepolia testnet)
 
-| Contract | Address | Verified |
-|---|---|---|
-| **DHPImplementation** | [`0x8087317540a6a536a2a88ebf9a2174a95833bf36`](https://base-sepolia.blockscout.com/address/0x8087317540a6a536a2a88ebf9a2174a95833bf36) | ✅ Sourcify exact_match |
-| **DHPFeeCollector** | [`0xcfabbd5f1c1bf369ccdbfacf798dcf79ba9e31ab`](https://base-sepolia.blockscout.com/address/0xcfabbd5f1c1bf369ccdbfacf798dcf79ba9e31ab) | ✅ Sourcify exact_match |
-| **DHPFactory** | [`0x8eb10373b3e9fcf99391f32a9c3560334adab120`](https://base-sepolia.blockscout.com/address/0x8eb10373b3e9fcf99391f32a9c3560334adab120) | ✅ Sourcify exact_match |
+The **v1.2.2 changes are code + docs changes with no storage-layout impact on the deployed v1.2.1 bytecode paths** — but they do change bytecode (removed surface), so the addresses below serve the **v1.2.1 build** until the v1.2.2 redeploy. Redeploy before further testnet use; **never** reuse v1.2.1 addresses on mainnet.
+
+| Contract | Address | Verified | Build |
+|---|---|---|---|
+| **DHPImplementation** | [`0x8087317540a6a536a2a88ebf9a2174a95833bf36`](https://base-sepolia.blockscout.com/address/0x8087317540a6a536a2a88ebf9a2174a95833bf36) | ✅ Sourcify exact_match | v1.2.1 |
+| **DHPFeeCollector** | [`0xcfabbd5f1c1bf369ccdbfacf798dcf79ba9e31ab`](https://base-sepolia.blockscout.com/address/0xcfabbd5f1c1bf369ccdbfacf798dcf79ba9e31ab) | ✅ Sourcify exact_match | v1.2.1 |
+| **DHPFactory** | [`0x8eb10373b3e9fcf99391f32a9c3560334adab120`](https://base-sepolia.blockscout.com/address/0x8eb10373b3e9fcf99391f32a9c3560334adab120) | ✅ Sourcify exact_match | v1.2.1 |
 
 **Mainnet: not yet deployed.** Awaiting external audit + DAO multisig setup on Base.
 
+### 🔑 Governance status (live, verified 2026-09-07)
+
+| Contract | `owner()` | Required endgame |
+|---|---|---|
+| DHPFactory | `0x25c7…d5b8` (deployer EOA) | **Renounce** at launch — safe; only gates `setVerified` curation |
+| DHPFeeCollector | `0x25c7…d5b8` (deployer EOA) | **Transfer to DAO Safe — NEVER renounce.** `sweep()`/`sweepTo()`/`sweepNative()` are `onlyOwner`; renouncing would permanently lock all future protocol fees. (v1.2.2 audit M-NEW-1.) |
+
 ---
 
-## ✅ Audit status (v1.2.1)
+## ✅ Audit status (v1.2.2)
 
-**Four sequential self-audit passes completed.** Each pass either fixed real issues or confirmed prior fixes.
+**Five sequential self-audit passes completed.** Each pass either fixed real issues or confirmed prior fixes.
 
 | Audit pass | Critical | High | Medium | Notes |
 |---|---|---|---|---|
 | [v1.0](SELF_AUDIT.md) | 2 | 4 | 7 | Original audit |
 | [v1.1](SELF_AUDIT_V1.1.md) | 1 new | 1 new | 3 new + 4 carried | Caught 2 new issues the v1.1 fixes themselves introduced |
 | [v1.2](SELF_AUDIT_V1.2.md) | 0 | 0 | 2 carried | All v1.1 criticals/highs fixed |
-| **[v1.2.1](SELF_AUDIT_V1.2.1.md)** | **0** | **0** | **0** | All carried mediums fixed. **Audit-ready for external review.** |
+| [v1.2.1](SELF_AUDIT_V1.2.1.md) | 0 | 0 | 0 | All carried mediums fixed |
+| **[v1.2.2](SELF_AUDIT_V1.2.2.md)** | **0** | **0** | **1 (governance docs)** | Fresh-eyes full-codebase pass (Lisa). M-NEW-1 + 3 low + 6 informational → **all fixed in v1.2.2** |
 
-**All critical, high, and medium findings from all passes are now closed.** Only low-severity items (documentation, dead-code cleanup) remain.
+**All critical, high, and medium findings from all passes are now closed.**
 
-**Tests:** 70 of 70 passing across 3 suites (DHPImplementation: 26, DHPFactory: 25, DHPFeeCollector: 19).
+**Tests:** 70 of 70 passing across 4 suites (DHPImplementation: 25, DHPFactory: 25, DHPFeeCollector: 18, DHPV122Audit: 2).
+
+### What changed in v1.2.2
+
+| Change | Audit ref |
+|---|---|
+| FeeCollector governance docs rewritten: **never renounce**; deploy script + AUDIT_SCOPE updated | M-NEW-1 |
+| Degenerate-state guard: `supply > 0 && totalAssets() == 0` now reverts `DegenerateVaultState()` instead of pricing shares 1:1 against burned tokens | L-NEW-1 |
+| `totalAssetsAfterTax()` removed (contradicted `totalAssets()`, misled integrators) | L-NEW-3 |
+| `onFeeReceived()`/`FeeReceived` removed (dead surface, fake-event vector); `pause()`/`unpause()` removed (dead since v1.0); `BURN_SINK` constant + empty `assembly {}` removed | I-NEW-1 |
+| Implementation can no longer be `initialize()`d directly (pre-marked in constructor) | I-NEW-2 |
+| `ERC4626_COMPATIBILITY.md` — full divergence list for integrators | I-NEW-3 |
+| Receiver-side strict-mode FOT nuance documented | I-NEW-4 |
+| rpTs truncation dust documented | I-NEW-5 |
+| Governance-status table in README (live `owner()` reads) | I-NEW-6 |
+| Broken `lib/` gitlinks fixed with real submodules + `.gitmodules` | L-NEW-2 |
 
 ---
 
@@ -57,14 +82,14 @@ DHPFeeCollector      (per-token fee aggregation, sweep to DAO treasury)
   - Remainder → **lock-in-vault burn** (tracked in `burnedBalance`, subtracted from `totalAssets()` so tokens are effectively removed from circulation but stay in the contract — works with USDT/USDC/BUSD which blacklist external burn addresses)
 - **Exit tax** `exitTaxBps` charged on every withdraw — same split.
 - **Dividends** accrue continuously via Synthetix StakingRewards math:
-  `rewardPerTokenStored` ticks up by `(dividendAmount × 1e18) / totalSupply` on every tax event. Users claim via `claimDividend(minAmountOut)` (slippage-protected) which pays their pending balance in the underlying token.
-- **Zero admin functions** on individual vaults. The factory is `Ownable2Step` (intended to be renounced post-launch). `Pausable` is exposed but only the factory owner can pause; after factory renounce, the pause capability becomes inert.
+  `rewardPerTokenStored` ticks up by `(dividendAmount × 1e18) / totalSupply` on every tax event (floor division; up to `supply − 1` wei of dust per event stays backing shares). Users claim via `claimDividend(minAmountOut)` (slippage-protected) which pays their pending balance in the underlying token.
+- **Zero admin functions** on individual vaults. There is no pause. The factory is `Ownable2Step` (intended to be **renounced** post-launch). The FeeCollector must **stay owned** by the DAO Safe (see governance table).
 
 ### Anti–fee-on-transfer (strict mode, default)
 
-Every deposit/withdrawal verifies that the actual `balanceOf(this)` delta equals the expected pre-tax amount. Tokens with fee-on-transfer, rebasing, or transfer hooks cannot pass this gate and revert with `FeeOnTransferToken()`.
+Every deposit/withdrawal verifies that the actual `balanceOf(this)` delta equals the expected pre-tax amount. Tokens with fee-on-transfer, rebasing, or transfer hooks cannot pass this gate and revert with `FeeOnTransferToken()`. Strict mode requires a fully silent token — receiver-side generosity hooks also fail the check (v1.2.2 note).
 
-**Permissive mode** (v1.2.1): A vault can be created with `acceptFeesFromTransfer: true` in its `TaxConfig`, which bypasses the anti-FOT check. This is opt-in per vault for known hook tokens (e.g., rebasing, marketing-fee, gas-burn tokens). Default is strict.
+**Permissive mode** (v1.2.1): A vault can be created with `acceptFeesFromTransfer: true` in its `TaxConfig`, which bypasses the anti-FOT check. This is opt-in per vault for known hook tokens (e.g., rebasing, marketing-fee, gas-burn tokens). Default is strict. The flag is immutable post-`initialize()`.
 
 ### Inflation attack protection (per-vault)
 
@@ -73,7 +98,7 @@ Each vault enforces a `minFirstDeposit` equal to `10^decimals` (i.e., 1.0 token 
 - 8-decimal tokens (SPX): 1.0 SPX minimum
 - 18-decimal tokens (ETH/wstETH): 1.0 token minimum
 
-1-wei squatters are rejected. No token is "free to squat."
+1-wei squatters are rejected. No token is "free to squat." `mint()` additionally cannot seed a fresh vault — the first position is always `deposit()`-based (see [ERC-4626 compatibility](ERC4626_COMPATIBILITY.md)).
 
 ### Eligibility gate (factory-side)
 
@@ -109,24 +134,26 @@ Off-chain checks (the frontend or factory helper script should verify before cal
 ```bash
 $ forge test
 …
-Ran 3 test suites in 11.92ms (12.96ms CPU time): 70 tests passed, 0 failed, 0 skipped (70 total tests)
+Ran 4 test suites in 9.22ms (18.85ms CPU time): 70 tests passed, 0 failed, 0 skipped (70 total tests)
 ```
 
 Coverage spans:
-- **26 `DHPImplementationTest`** — deposit/withdraw/redeem/dividend math/anti-FOT/pause/edge cases/v1.2.1 fixes
+- **25 `DHPImplementationTest`** — deposit/withdraw/redeem/dividend math/anti-FOT/edge cases/v1.2.1 fixes
 - **25 `DHPFactoryTest`** — clone deploy/eligibility gate/Ownable2Step/Verified flag/decimal bounds/creation-fee grief tests
-- **19 `DHPFeeCollectorTest`** — sweep/per-token overrides/native ETH/owner admin/zero-balance guards
+- **18 `DHPFeeCollectorTest`** — sweep/per-token overrides/native ETH/owner admin/zero-balance guards
+- **2 `DHPV122AuditTest`** — implementation self-init block + degenerate-state loud revert (locks in the v1.2.2 fixes)
 
 ---
 
 ## 🛠️ Development
 
 ```bash
-git clone --branch feat/v1-core-contracts https://github.com/CryptoSI-DAO/diamond-hands-protocol
+git clone --recurse-submodules https://github.com/CryptoSI-DAO/diamond-hands-protocol
 cd diamond-hands-protocol
-forge install
 forge test
 ```
+
+(If you cloned without `--recurse-submodules`: `git submodule update --init --recursive`.)
 
 ### Deploy to Base Sepolia
 
@@ -156,7 +183,7 @@ forge script script/SmokeTest.s.sol:SmokeTest --rpc-url $BASE_SEPOLIA_RPC_URL --
 
 | Repo | Purpose |
 |---|---|
-| **[diamond-hands-protocol](https://github.com/CryptoSI-DAO/diamond-hands-protocol)** (this) | Smart contracts: factory, vault, fee collector (v1.2.1) |
+| **[diamond-hands-protocol](https://github.com/CryptoSI-DAO/diamond-hands-protocol)** (this) | Smart contracts: factory, vault, fee collector (v1.2.2) |
 | **[diamond-landing](https://github.com/CryptoSI-DAO/diamond-landing)** | Frontend landing page (live at [cryptosi-dao.github.io/diamond-landing](https://cryptosi-dao.github.io/diamond-landing/)) |
 
 ---
@@ -164,11 +191,11 @@ forge script script/SmokeTest.s.sol:SmokeTest --rpc-url $BASE_SEPOLIA_RPC_URL --
 ## 🔒 Security
 
 - Built on OpenZeppelin Contracts v5.1 (battle-tested primitives).
-- ERC-4626 share math re-implemented to fit the per-token-clone model (OZ v5 makes the underlying immutable in its constructor).
+- ERC-4626 share math re-implemented to fit the per-token-clone model (divergences documented in [ERC4626_COMPATIBILITY.md](ERC4626_COMPATIBILITY.md)).
 - Dividend math follows the Synthetix StakingRewards pattern (audited across billions in TVL).
-- Reentrancy protection via `ReentrancyGuardTransient` (modern OZ v5 transient storage).
-- Each vault is **individually renounced** at deployment — no admin keys survive. The factory is `Ownable2Step` and intended to be **renounced post-launch**.
-- **Self-audit:** v1.2.1 has completed 4 sequential self-audit passes with **0 critical, 0 high, 0 medium findings remaining.** See [SELF_AUDIT_V1.2.1.md](SELF_AUDIT_V1.2.1.md).
+- Reentrancy protection via `ReentrancyGuardTransient` (modern OZ v5 transient storage). The asset token and share token being **different contracts** is a deliberate invariant — see the reentrancy note atop `DHPImplementation.sol`.
+- The factory is `Ownable2Step`, intended to be **renounced post-launch** (safe). The FeeCollector is `Ownable2Step` and must be **transferred to the DAO Safe and never renounced** — its `sweep` family is the only path for protocol fees to reach the treasury (v1.2.2 audit M-NEW-1).
+- **Self-audit:** v1.2.2 has completed 5 sequential self-audit passes. All critical, high, and medium findings across all passes are closed. See [SELF_AUDIT_V1.2.2.md](SELF_AUDIT_V1.2.2.md).
 - **External audit:** RFP prepared in [RFP_AUDIT.md](RFP_AUDIT.md); not yet sent to external firms.
 - See [SECURITY.md](SECURITY.md) for responsible disclosure.
 
@@ -176,7 +203,7 @@ forge script script/SmokeTest.s.sol:SmokeTest --rpc-url $BASE_SEPOLIA_RPC_URL --
 
 ## ⚠️ Risk Disclosure
 
-Every Diamond Hands Vault is a **zero-sum game** by design. Payouts to diamond hands come from paper hands' taxes — not from external yield. Users can lose tokens. All vaults are renounced at launch. No team. No roadmap. No expectation of financial return. Entertainment purposes only.
+Every Diamond Hands Vault is a **zero-sum game** by design. Payouts to diamond hands come from paper hands' taxes — not from external yield. Users can lose tokens. Vaults have no admin keys; the factory renounces at launch. No team. No roadmap. No expectation of financial return. Entertainment purposes only.
 
 ---
 

@@ -15,18 +15,22 @@ import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/Reentrancy
 ///         directly to this contract on every deposit/withdraw. This contract
 ///         does not own those tokens; vaults just `safeTransfer` here.
 ///
-///         Why a separate collector?
+/// @dev    Why a separate collector?
 ///         - The vault's `feeCollector` reference is set at clone init and
 ///           immutable forever. If we pointed it at the DAO multisig
 ///           directly, a single misconfigured multisig on one chain would
 ///           lock the protocol fee. By routing through this collector, we
 ///           can swap the destination per token without redeploying vaults.
-///         - The collector itself is `Ownable2Step` so the DAO can update
-///           the sweep destination (e.g., a Safe) and ultimately renounce.
 ///
-///         Sweep is permissioned to the DAO owner. Renouncing freezes the
-///         sweep target at its last set value — anyone can still read the
-///         balances, but tokens only leave via `sweep(token)`.
+///         ⚠️ GOVERNANCE — DO NOT RENOUNCE THIS CONTRACT (v1.2.2, audit
+///         M-NEW-1). Unlike the factory, the FeeCollector's `sweep()`,
+///         `sweepTo()` and `sweepNative()` are `onlyOwner`. Renouncing
+///         ownership here would PERMANENTLY LOCK every future protocol fee
+///         inside this contract. The required endgame is: transfer ownership
+///         (Ownable2Step) to the DAO's Safe/multisig — and keep it owned
+///         forever. Only the FACTORY is meant to be renounced (that is safe:
+///         renouncing merely freezes `setVerified` curation; permissionless
+///         `createVault` keeps working).
 contract DHPFeeCollector is Ownable2Step, ReentrancyGuardTransient {
     using SafeERC20 for IERC20;
 
@@ -47,7 +51,6 @@ contract DHPFeeCollector is Ownable2Step, ReentrancyGuardTransient {
     // Events
     // ──────────────────────────────────────────────────────────────────────────
 
-    event FeeReceived(address indexed token, uint256 amount);
     event Swept(address indexed token, address indexed to, uint256 amount);
     event DefaultTreasuryUpdated(address indexed previous, address indexed current);
     event SweepOverrideUpdated(address indexed token, address indexed previous, address indexed current);
@@ -73,25 +76,13 @@ contract DHPFeeCollector is Ownable2Step, ReentrancyGuardTransient {
     // Vault-side: receive fees
     // ──────────────────────────────────────────────────────────────────────────
 
-    /// @notice Vaults call this when they route their protocol fee here.
-    ///         Implemented as a plain receive hook: any ERC-20 transfer to
-    ///         this contract is treated as a fee deposit. We use
-    ///         `tokensReceived` here for symmetry with SafeERC20 patterns
-    ///         but no actual accounting is needed at this layer.
-    function onFeeReceived(address token, uint256 amount) external {
-        // No state mutation needed — the balance is implicit in
-        // `IERC20(token).balanceOf(address(this))`. We emit an event so
-        // indexers can track the flow without scanning every vault's
-        // `TaxCollected` event.
-        emit FeeReceived(token, amount);
-    }
-
-    /// @notice ERC-20 fallback: some vaults may simply transfer without
-    ///         calling onFeeReceived. We accept the transfer and emit the
-    ///         same event so accounting is consistent.
-    /// @dev    Note: this is the *contract-level* catch-all, not the ERC-20
-    ///         standard `tokensReceived` hook. Vaults use safeTransfer, so
-    ///         they just succeed here.
+    /// @notice Vaults route their 0.5% protocol share here via plain
+    ///         `safeTransfer` — no hook call is needed or used, and the
+    ///         balance is implicit in `IERC20(token).balanceOf(address(this))`.
+    ///         Indexers should track fee inflows via each vault's
+    ///         `TaxCollected` event (the old `onFeeReceived()`/`FeeReceived`
+    ///         surface was removed in v1.2.2 — audit I-NEW-1: it was never
+    ///         called by vaults and allowed anyone to emit fake fee events).
     // solhint-disable-next-line no-empty-blocks
     receive() external payable {}
 

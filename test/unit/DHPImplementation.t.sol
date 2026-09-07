@@ -330,15 +330,8 @@ contract DHPImplementationTest is Test {
         IDHPVault(fotVault).deposit(100e18, alice);
     }
 
-    function test_pause_blocks_deposits() public {
-        vm.prank(address(factory));
-        // Factory is the only one who can pause. We impersonate here.
-        DHPImplementation(payable(address(vault))).pause();
-
-        vm.prank(alice);
-        vm.expectRevert();
-        v.deposit(10_000e8, alice);
-    }
+    // (v1.2.2) test_pause_blocks_deposits removed with the pause() surface
+    // itself — audit I-NEW-1: pause was dead code since v1.0 and is deleted.
 
     function test_zero_amount_reverts() public {
         vm.prank(alice);

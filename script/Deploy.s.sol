@@ -59,8 +59,9 @@ contract DeployScript is Script {
         console2.log("\nNext steps:");
         console2.log("  1. Verify all 3 contracts on Sourcify (run scripts/verify_sourcify.sh)");
         console2.log("  2. Smoke test: createVault() for a fake SPX6900-like test token");
-        console2.log("  3. Transfer factory ownership to DAO multisig (or renounce if mainnet launch)");
-        console2.log("  4. Transfer feeCollector ownership to DAO multisig");
+        console2.log("  3. Transfer FACTORY ownership to DAO multisig, or renounce at mainnet launch (safe: only gates setVerified)");
+        console2.log("  4. Transfer FEECOLLECTOR ownership to DAO Safe/multisig - NEVER renounce it!");
+        console2.log("     (sweep()/sweepTo()/sweepNative() are onlyOwner; renouncing locks all future fees forever - audit v1.2.2 M-NEW-1)");
     }
 }
 

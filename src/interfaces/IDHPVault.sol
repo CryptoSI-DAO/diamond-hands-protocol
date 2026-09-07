@@ -50,8 +50,9 @@ interface IDHPVault {
     ///         protocol fee is taken). The remainder is sent to the burn sink.
     function dividendShareBps() external view returns (uint16);
 
-    /// @notice Total assets currently held by the vault (post-tax).
-    function totalAssetsAfterTax() external view returns (uint256);
+    // (v1.2.2) `totalAssetsAfterTax()` removed from the interface — it
+    // returned the raw balance including burned tokens, contradicting
+    // `totalAssets()` and misleading integrators. (Audit L-NEW-3.)
 
     // (Note: ERC-20 share surface — balanceOf, totalSupply, transfer, approve —
 //  is inherited from the underlying ERC20 base; not redeclared here to
