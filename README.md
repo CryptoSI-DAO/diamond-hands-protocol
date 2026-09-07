@@ -43,7 +43,7 @@ The **v1.2.2 changes are code + docs changes with no storage-layout impact on th
 
 **All critical, high, and medium findings from all passes are now closed.**
 
-**Tests:** 70 of 70 passing across 4 suites (DHPImplementation: 25, DHPFactory: 25, DHPFeeCollector: 18, DHPV122Audit: 2).
+**Tests:** 72 of 72 passing across 5 suites (70 unit + 2 fuzz; fuzz verified at 1000 runs).
 
 ### What changed in v1.2.2
 
@@ -59,6 +59,8 @@ The **v1.2.2 changes are code + docs changes with no storage-layout impact on th
 | rpTs truncation dust documented | I-NEW-5 |
 | Governance-status table in README (live `owner()` reads) | I-NEW-6 |
 | Broken `lib/` gitlinks fixed with real submodules + `.gitmodules` | L-NEW-2 |
+| **`deposit()` share conversion moved to the pre-pull state** — preview/execution divergence (up to 56× under-credit on large deposits) found by the new fuzz harness | **M-NEW-2 (Addendum A1)** |
+| **Permanent fuzz harness** (`test/fuzz/DHPFuzzWalk.t.sol`): random 40-op walks checking token conservation, solvency, burn-lock, dividend ledger + preview/execution probes | Addendum A1 |
 
 ---
 

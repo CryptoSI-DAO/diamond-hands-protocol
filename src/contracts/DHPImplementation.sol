@@ -388,6 +388,16 @@ contract DHPImplementation is ERC20, ReentrancyGuardTransient, Ownable, IDHPVaul
         uint256 tax = (assets * entryTaxBps) / BPS;
         uint256 net = assets - tax;
 
+        // (v1.2.2 addendum A1 — M-NEW-2, found by fuzz test DHPFuzzWalk) The
+        // share conversion MUST read the PRE-DEPOSIT state so that
+        // `deposit()` and `previewDeposit()` agree, exactly as in OZ's
+        // ERC-4626 (which literally calls `previewDeposit()` before pulling
+        // the assets). Converting after the pull+distribute made the
+        // exchange-rate denominator include the deposit itself, silently
+        // under-crediting large deposits relative to the previewed amount.
+        shares = _convertToShares(net, /*roundingUp=*/ false);
+        if (shares == 0) revert ZeroAmount();
+
         // Anti-FOT: pull the full `assets` from the user, then verify the
         // vault received exactly `assets` (unless `acceptFeesFromTransfer`
         // is set, in which case FOT/hook tokens are accepted). The check
@@ -399,13 +409,11 @@ contract DHPImplementation is ERC20, ReentrancyGuardTransient, Ownable, IDHPVaul
         if (!acceptFeesFromTransfer && postBal - preBal != assets) revert FeeOnTransferToken();
 
         // Dividend accounting: send fee+burn out first so totalAssets is correct,
-        // then accrue the dividend index (using pre-mint supply), then mint shares
-        // based on the post-tax exchange rate.
+        // then accrue the dividend index (using pre-mint supply), then mint
+        // the shares computed above on the pre-deposit exchange rate.
         _distributeTax(tax);
         _accrueDividend(tax);
 
-        shares = _convertToShares(net, /*roundingUp=*/ false);
-        if (shares == 0) revert ZeroAmount();
         _mint(receiver, shares);
 
         emit Deposit(msg.sender, receiver, assets, shares);

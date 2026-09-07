@@ -158,4 +158,23 @@ With `acceptFeesFromTransfer == false`, the post-transfer balance check on the *
 
 ---
 
+## 📎 Addendum A1 — M-NEW-2 (found by fuzzing, post-publication same day)
+
+**During the v1.2.2 verification pass, a fuzz harness (`test/fuzz/DHPFuzzWalk.t.sol`) surfaced one additional MEDIUM that all five human-guided passes and the 70 unit tests had missed.** This is exactly why the harness exists, and it is now part of the permanent suite.
+
+### M-NEW-2: `deposit()` priced shares on the post-pull state — preview/execution divergence
+
+**Severity:** Medium (spec violation; no fund loss; systematic depositor under-crediting on large deposits relative to previews)
+**File:** `DHPImplementation.sol::deposit()`
+
+`deposit()` computed `shares = _convertToShares(net)` **after** pulling the gross deposit and distributing the tax — so the exchange-rate denominator (`totalAssets()`) already included the deposit itself. `previewDeposit()` converts on the pre-deposit state, as OZ's ERC-4626 does (it literally calls `previewDeposit()` before pulling assets). Result: `deposit()` ≠ `previewDeposit()` whenever the deposit was non-trivial relative to vault size — a fuzz counterexample showed a **56× shortfall** in minted shares versus the previewed amount. Redeem/mint/withdraw converted on pre-state and were never affected. Not a theft vector (no value leaves the vault; the depositor's own credits were understated), but any ERC-4626 adapter or UI trusting previews would misrepresent outcomes.
+
+**Fix (applied in A1):** move the `_convertToShares` computation above the `safeTransferFrom` pull, so both preview and execution read the identical pre-deposit state.
+
+**Fuzz harness notes (now permanent):** random 40-op walks (deposit/redeem/claim/transfer) over 3 actors check global token conservation, full-redemption solvency (`previewRedeem(totalSupply) ≤ totalAssets()`), burn-lock integrity, and dividend-ledger sanity; a separate seeded-probe test pins `previewDeposit == deposit` exactly and `previewRedeem ≤ actual ≤ preview + 1` (the ≤1-wei slack is the user-favourable rounding in `redeem`, which is ERC-4626-compliant: preview must never over-promise).
+
+**Updated summary:** v1.2.2 = 1 medium from the manual pass (M-NEW-1) **+ 1 medium from fuzzing (M-NEW-2, fixed)**, 3 low, 6 informational. Tests: **72** (70 unit + 2 fuzz), all passing.
+
+---
+
 *This report is a self-audit by an AI agent with fresh eyes on the full codebase. It does NOT replace an external audit — it exists to make that audit cheaper.*

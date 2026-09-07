@@ -1,0 +1,11 @@
+{
+  "lib/forge-std": {
+    "rev": "886b4f8b63409ef474542de6394d25a9b5908ed3"
+  },
+  "lib/oz-contracts": {
+    "branch": {
+      "name": "v5.1.0",
+      "rev": "69c8def5f222ff96f2b5beff05dfba996368aa79"
+    }
+  }
+}
