@@ -1,10 +1,30 @@
 # DHP v1 Self-Audit Findings Report
 
 **Auditor:** Spock (Claude, via Hermes Agent, CryptoSI DAO infrastructure)
-**Date:** 2026-09-05
+**Date:** 2026-09-05 (original) · 2026-09-07 (critical/high fixes applied)
 **Scope:** `DHPImplementation.sol`, `DHPFactory.sol`, `DHPFeeCollector.sol`, `IDHPVault.sol` (~900 LOC)
 **Methodology:** Manual line-by-line adversarial review + threat modelling + invariant derivation. **NOT** an external audit.
 **Tests:** 54 of 54 passing (DHPImplementation.t.sol: 15, DHPFactory.t.sol: 20, DHPFeeCollector.t.sol: 19).
+
+## Fix status (as of 2026-09-07)
+
+| Finding | Status | Resolution |
+|---|---|---|
+| C-1 `mint()` ordering | ✅ **Fixed** | Reordered to `_distributeTax` → `_accrueDividend` → `_mint` (matches `deposit()`) |
+| C-2 BURN_SINK blacklist | ✅ **Fixed** | Replaced `safeTransfer(0xdead)` with lock-in-vault model; burn tracked in `burnedBalance` storage and subtracted from `totalAssets()`. Works with USDT/USDC/BUSD. |
+| H-1 `createVault` griefing | ✅ **Fixed** | 0.001 ETH creation fee, forwarded to `feeCollector`. ~13K vaults per 1 ETH. |
+| H-3 Inflation attack | ✅ **Fixed** | `MIN_FIRST_DEPOSIT = 1e10` raw rejects 1-wei squatters. Simpler than the originally-proposed dead-share approach. |
+| H-2 `mint()` over-mints | ✅ **Fixed** | Resolved by C-1 reorder. |
+| H-4 Direct-donation attack | ⚠️ Noted | Low risk. Direct token transfer to vault inflates share price (not exploitable since share math is consistent). |
+| M-* (medium) | ⏳ Pending | See "Pending" section below. |
+| L-* (low) | ⏳ Pending | Code smell / gas — non-blocking. |
+
+**Redeployed addresses** (Base Sepolia, after fixes):
+- DHPImplementation: `0xb9c96577fb259197a9728bb5bef1fd88baaea2dc`
+- DHPFactory: `0xae729f69b76f24a374fd6bfe8ac8ac3ab668fa0e`
+- DHPFeeCollector: `0xa4b62e787d88363374037c47dbb70f8d31fb6733`
+
+All Sourcify-verified (exact_match). Smoke test on Base Sepolia passed.
 
 ## Severity scale
 
@@ -22,7 +42,7 @@
 
 ### C-1: `mint()` has the same `_distributeTax` ordering bug as `deposit()` (unfixed)
 
-**File:** `src/contracts/DHPImplementation.sol` lines 322-345
+**File:** `src/contracts/DHPImplementation.sol` lines 322-345 — ✅ **FIXED**
 
 The fix I applied to `deposit()` (run `_distributeTax` BEFORE `_accrueDividend`) was **not** applied to `mint()`. Currently:
 

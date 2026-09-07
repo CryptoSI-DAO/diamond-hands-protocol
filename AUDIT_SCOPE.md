@@ -10,9 +10,9 @@
 
 | Contract | Path | LOC | Address (Base Sepolia) |
 |---|---|---|---|
-| **DHPImplementation** | `src/contracts/DHPImplementation.sol` | ~530 | `0x562e4ECa55ccA4Bb411a81f2605F992C00395f0f` |
-| **DHPFactory** | `src/contracts/DHPFactory.sol` | ~190 | `0xee1e2343E513736f29ceeF24071B63874661273F` |
-| **DHPFeeCollector** | `src/contracts/DHPFeeCollector.sol` | ~190 | `0x11F41D72E8e612b94b831Df38B12F5Bc3D58D87C` |
+| **DHPImplementation** | `src/contracts/DHPImplementation.sol` | ~530 | `0xb9c96577fb259197a9728bb5bef1fd88baaea2dc` |
+| **DHPFactory** | `src/contracts/DHPFactory.sol` | ~190 | `0xae729f69b76f24a374fd6bfe8ac8ac3ab668fa0e` |
+| **DHPFeeCollector** | `src/contracts/DHPFeeCollector.sol` | ~190 | `0xa4b62e787d88363374037c47dbb70f8d31fb6733` |
 
 Plus the external interface `src/interfaces/IDHPVault.sol` (~100 LOC).
 
@@ -68,9 +68,9 @@ forge test -vv
 
 | Contract | Address | Sourcify |
 |---|---|---|
-| DHPImplementation | `0x562e4ECa55ccA4Bb411a81f2605F992C00395f0f` | ✅ exact_match |
-| DHPFactory | `0xee1e2343E513736f29ceeF24071B63874661273F` | ✅ exact_match |
-| DHPFeeCollector | `0x11F41D72E8e612b94b831Df38B12F5Bc3D58D87C` | ✅ exact_match |
+| DHPImplementation | `0xb9c96577fb259197a9728bb5bef1fd88baaea2dc` | ✅ exact_match |
+| DHPFactory | `0xae729f69b76f24a374fd6bfe8ac8ac3ab668fa0e` | ✅ exact_match |
+| DHPFeeCollector | `0xa4b62e787d88363374037c47dbb70f8d31fb6733` | ✅ exact_match |
 
 Smoke-test tx hashes and on-chain evidence are in `deployments.json`.
 
