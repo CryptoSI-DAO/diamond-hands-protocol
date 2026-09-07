@@ -64,6 +64,12 @@ contract DHPFactory is Ownable2Step, ReentrancyGuardTransient {
     uint16 public constant MAX_DIVIDEND_SHARE_BPS = 9_000; // 90%
     uint16 public constant PROTOCOL_FEE_BPS = 50;      // 0.5%
 
+    /// @dev Creation fee to prevent griefing the registry. ~$3 at current ETH
+    ///      prices — high enough to make mass-griefing expensive (~13K vaults
+    ///      per 1 ETH), low enough that legitimate deploys aren't priced out.
+    ///      All proceeds go to the DAO treasury (the feeCollector).
+    uint256 public constant VAULT_CREATION_FEE = 0.001 ether;
+
     // ──────────────────────────────────────────────────────────────────────────
     // Mutable configuration (DAO-gated, intended to freeze post-launch)
     // ──────────────────────────────────────────────────────────────────────────
@@ -122,6 +128,8 @@ contract DHPFactory is Ownable2Step, ReentrancyGuardTransient {
     error InvalidTaxConfig();
     error InvalidToken();
     error InvalidDecimals(uint8 returned);
+    error InsufficientCreationFee();
+    error FeeTransferFailed();
 
     // ──────────────────────────────────────────────────────────────────────────
     // Constructor
@@ -157,11 +165,29 @@ contract DHPFactory is Ownable2Step, ReentrancyGuardTransient {
     /// @param  token   The underlying ERC-20 the vault will wrap.
     /// @param  cfg     Tax configuration.
     /// @return vault   The address of the newly created clone.
+    /// @dev    Requires `msg.value >= VAULT_CREATION_FEE` (0.001 ETH).
+    ///         Excess ETH is refunded. The fee goes to the DAO treasury
+    ///         (feeCollector) to prevent griefing the registry — without
+    ///         a fee, anyone can call createVault() for any token (including
+    ///         spam tokens they create themselves) and bloat `allVaults` until
+    ///         off-chain indexers (The Graph, frontend loops) hit gas limits.
     function createVault(address token, TaxConfig calldata cfg)
         external
+        payable
         nonReentrant
         returns (address vault)
     {
+        // Anti-grief: require the creation fee. Refund any excess.
+        uint256 paid = msg.value;
+        if (paid < VAULT_CREATION_FEE) {
+            revert InsufficientCreationFee();
+        }
+        if (paid > VAULT_CREATION_FEE) {
+            // Refund the excess to the caller.
+            (bool ok, ) = payable(msg.sender).call{value: paid - VAULT_CREATION_FEE}("");
+            require(ok, "Fee refund failed");
+        }
+
         if (token == address(0)) revert InvalidToken();
         if (getVault[token] != address(0)) revert VaultAlreadyExistsForToken(token);
 
@@ -204,6 +230,12 @@ contract DHPFactory is Ownable2Step, ReentrancyGuardTransient {
         getVault[token] = vault;
         getToken[vault] = token;
         allVaults.push(vault);
+
+        // Forward the creation fee to the DAO treasury.
+        if (VAULT_CREATION_FEE > 0) {
+            (bool ok, ) = payable(feeCollector).call{value: VAULT_CREATION_FEE}("");
+            if (!ok) revert FeeTransferFailed();
+        }
 
         emit VaultCreated(token, vault, cfg.entryTaxBps, cfg.exitTaxBps, cfg.dividendShareBps);
     }

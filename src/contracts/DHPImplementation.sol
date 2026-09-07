@@ -55,10 +55,17 @@ contract DHPImplementation is ERC20, ReentrancyGuardTransient, Pausable, Ownable
     uint16 internal constant PROTOCOL_FEE_BPS = 50;      // 0.5%
     uint16 internal constant MAX_DIVIDEND_SHARE_BPS = 9_000; // 90%
 
-    address internal constant BURN_SINK = 0x000000000000000000000000000000000000dEaD;
+    /// @dev The burn sink is `address(0xdead)`. Many major tokens (USDT, USDC,
+    ///      BUSD) blacklist this address to prevent "proof-of-burn" attacks,
+    ///      which would DoS the protocol on any token with blacklist hooks.
+    ///      We keep the constant for reference but the actual burn mechanism
+    ///      is the "lock-in-vault" model below (tracked in `burnedBalance`,
+    ///      subtracted from `totalAssets()` for share-price math, but never
+    ///      leaves the vault). See `_distributeTax` for the implementation.
+    address internal constant BURN_SINK = address(0xdead);
 
+    /// @dev Precision scale for `rewardPerTokenStored`.
     uint256 internal constant PRECISION = 1e18;
-
     // ──────────────────────────────────────────────────────────────────────────
     // Events (declared in IDHPVault; redeclared here so internal emit sites compile)
     // ──────────────────────────────────────────────────────────────────────────
@@ -105,6 +112,14 @@ contract DHPImplementation is ERC20, ReentrancyGuardTransient, Pausable, Ownable
 
     /// @inheritdoc IDHPVault
     mapping(address account => uint256) public override rewards;
+
+    /// @dev Per-vault accumulator for tokens that should be "burned" but
+    ///      stay in the contract (lock-in-vault model). Subtracted from
+    ///      `totalAssets()` for share-price math, so these tokens are
+    ///      effectively removed from circulating supply without needing
+    ///      to send them to an external burn address (which would DoS the
+    ///      protocol on tokens like USDT/USDC that blacklist 0x…dEaD).
+    uint256 public burnedBalance;
 
     /// @dev The underlying token this vault wraps. Set in `initialize()`.
     IERC20 internal _assetToken;
@@ -207,11 +222,31 @@ contract DHPImplementation is ERC20, ReentrancyGuardTransient, Pausable, Ownable
 
     /// @notice Total assets currently managed by the vault.
     /// @dev    For the per-vault case this equals the underlying token balance
-    ///         (tax inflows minus withdrawals; burned tokens leave the vault
-    ///         but never come back).
+    ///         held by the contract MINUS the burned (locked-in-vault) balance.
+    ///         This is what backs the outstanding share supply: the share
+    ///         price is `(totalAssets - burnedBalance) / totalSupply`. Tokens
+    ///         in `burnedBalance` are effectively removed from circulation
+    ///         but stay in this contract (no external burn address required,
+    ///         so the protocol works on tokens that blacklist 0x…dEaD).
     function totalAssets() public view returns (uint256) {
-        return _assetToken.balanceOf(address(this));
+        uint256 bal = _assetToken.balanceOf(address(this));
+        // Defense in depth: balanceOf can return less than expected for
+        // rebasing tokens; cap the subtraction at bal to avoid underflow.
+        return bal > burnedBalance ? bal - burnedBalance : 0;
     }
+
+    /// @dev Minimum first-deposit size (in raw token units). This is the
+    ///      anti-inflation-attack guard (audit H-3): by requiring the first
+    ///      depositor to deposit a meaningful amount, we prevent 1-wei squat
+    ///      attacks where an attacker deposits 1 wei, then the next "real"
+    ///      depositor loses half their deposit to the dividend pool.
+    ///      Set to 1e10 raw units:
+    ///        - 18-decimal tokens: 1e10/1e18 = 1e-8 = 0.00000001 ETH (~$0.03)
+    ///        -  8-decimal tokens: 1e10/1e8  = 100 token units
+    ///        -  6-decimal tokens: 1e10/1e6  = 10,000 token units
+    ///      Trivial for legitimate users; prohibitive for griefers (each
+    ///      squat attempt costs real money).
+    uint256 public constant MIN_FIRST_DEPOSIT = 1e10;
 
     // ──────────────────────────────────────────────────────────────────────────
     // ERC-4626 share accounting (re-implemented; not inherited)
@@ -294,6 +329,14 @@ contract DHPImplementation is ERC20, ReentrancyGuardTransient, Pausable, Ownable
         if (assets == 0) revert ZeroAmount();
         if (receiver == address(0)) revert ZeroAddress();
 
+        // First-deposit guard: if no shares exist yet, require a minimum
+        // deposit. This prevents 1-wei squat attacks where a griefer takes
+        // the first-depositor slot and then captures subsequent real
+        // depositors' funds via the dividend pool. (Audit finding H-3.)
+        if (totalSupply() == 0 && assets < MIN_FIRST_DEPOSIT) {
+            revert ZeroAmount();
+        }
+
         uint256 tax = (assets * entryTaxBps) / BPS;
         uint256 net = assets - tax;
 
@@ -306,8 +349,8 @@ contract DHPImplementation is ERC20, ReentrancyGuardTransient, Pausable, Ownable
         if (postBal - preBal != assets) revert FeeOnTransferToken();
 
         // Dividend accounting: send fee+burn out first so totalAssets is correct,
-// then accrue the dividend index (using pre-mint supply), then mint shares
-// based on the post-tax exchange rate.
+        // then accrue the dividend index (using pre-mint supply), then mint shares
+        // based on the post-tax exchange rate.
         _distributeTax(tax);
         _accrueDividend(tax);
 
@@ -329,6 +372,18 @@ contract DHPImplementation is ERC20, ReentrancyGuardTransient, Pausable, Ownable
         if (shares == 0) revert ZeroAmount();
         if (receiver == address(0)) revert ZeroAddress();
 
+        // First-deposit guard (same anti-squat protection as deposit()).
+        // For mint(), require that totalAssets() is already at least the
+        // minimum. (If totalSupply > 0, some other user has already
+        // deposited, so the inflation attack isn't possible.)
+        if (totalSupply() == 0) {
+            // First-ever call to mint() must come after a deposit() that
+            // established the minimum. We don't support a "pure mint" first
+            // because that would require knowing the deposit size, which
+            // previewMint can't determine when supply is 0.
+            revert ZeroAmount();
+        }
+
         assets = previewMint(shares);
         uint256 tax = (assets * entryTaxBps) / BPS;
 
@@ -337,9 +392,13 @@ contract DHPImplementation is ERC20, ReentrancyGuardTransient, Pausable, Ownable
         uint256 postBal = _assetToken.balanceOf(address(this));
         if (postBal - preBal != assets) revert FeeOnTransferToken();
 
+        // Mirror deposit() order: distribute tax → accrue dividend → mint.
+        // Distributing tax first means the user pays the post-distribute
+        // exchange rate (correct), instead of over-minting at the
+        // pre-distribute rate (the old bug).
+        _distributeTax(tax);
         _accrueDividend(tax);
         _mint(receiver, shares);
-        _distributeTax(tax);
 
         emit Deposit(msg.sender, receiver, assets, shares);
     }
@@ -460,6 +519,14 @@ contract DHPImplementation is ERC20, ReentrancyGuardTransient, Pausable, Ownable
 
     /// @dev Send the dividend portion, the burn portion, and the protocol fee
     ///      to their respective sinks.
+    ///      - dividend portion: stays in the vault, backs the dividend pool
+    ///      - protocol portion: sent to `feeCollector` (DAO-controlled)
+    ///      - burn portion: tracked in `burnedBalance` (lock-in-vault model).
+    ///        The tokens themselves do NOT leave the contract — they remain
+    ///        in the contract's balance but are subtracted from `totalAssets()`
+    ///        so they cannot be withdrawn by anyone. This makes the burn
+    ///        deflationary without depending on an external burn address,
+    ///        which would be blacklisted by USDT/USDC/BUSD-style tokens.
     function _distributeTax(uint256 taxAmount) internal {
         uint256 dividendPortion = (taxAmount * dividendShareBps) / BPS;
         uint256 protocolPortion = (taxAmount * PROTOCOL_FEE_BPS) / BPS;
@@ -469,7 +536,9 @@ contract DHPImplementation is ERC20, ReentrancyGuardTransient, Pausable, Ownable
             _assetToken.safeTransfer(feeCollector, protocolPortion);
         }
         if (burnPortion > 0) {
-            _assetToken.safeTransfer(BURN_SINK, burnPortion);
+            // Lock-in-vault burn: tokens stay in the contract but are
+            // subtracted from totalAssets() so they're effectively burned.
+            burnedBalance += burnPortion;
             emit TokensBurned(burnPortion);
         }
         // dividendPortion STAYS in the vault — it backs the dividend pool.

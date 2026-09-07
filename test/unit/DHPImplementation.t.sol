@@ -29,13 +29,11 @@ contract DHPImplementationTest is Test {
     address internal alice = makeAddr("alice");
     address internal bob = makeAddr("bob");
     address internal carol = makeAddr("carol");
-    address internal collectorOwner = makeAddr("collectorOwner");
+    address internal collectorOwner = makeAddr("collector-owner");
 
     uint16 constant ENTRY_TAX = 500;     // 5%
     uint16 constant EXIT_TAX = 1_000;    // 10%
     uint16 constant DIV_SHARE = 7_000;   // 70% of tax → dividends
-
-    address constant BURN_SINK = 0x000000000000000000000000000000000000dEaD;
 
     function setUp() public {
         // Deploy the canonical implementation.
@@ -48,6 +46,10 @@ contract DHPImplementationTest is Test {
             18  // maxDecimals
         );
 
+        // Fund the test contract so it can pay the vault creation fee (0.001 ETH)
+        // in setUp() and in the FOT test below.
+        vm.deal(address(this), 100 ether);
+
         // Deploy a standard ERC-20 (no fee-on-transfer).
         token = new MockERC20("SPX6900", "SPX", 8);
 
@@ -57,7 +59,8 @@ contract DHPImplementationTest is Test {
             exitTaxBps: EXIT_TAX,
             dividendShareBps: DIV_SHARE
         });
-        vault = DHPImplementation(factory.createVault(address(token), cfg));
+        uint256 creationFee = factory.VAULT_CREATION_FEE();
+        vault = DHPImplementation(factory.createVault{value: creationFee}(address(token), cfg));
         v = IDHPVault(address(vault));
 
         // Mint to users.
@@ -90,16 +93,22 @@ contract DHPImplementationTest is Test {
     function test_first_deposit_no_tax_inflation() public {
         // On first deposit, share rate is 1:1 with the net assets (post-tax).
         // Token has 8 decimals. depositAmt = 10_000e8 raw = 10_000 SPX.
+        // (Above the MIN_FIRST_DEPOSIT guard of 1e10 raw = 100 token units.)
         uint256 depositAmt = 10_000e8;
         vm.prank(alice);
         uint256 shares = v.deposit(depositAmt, alice);
         // Net = 10_000 SPX - 5% tax (500 SPX) = 9_500 SPX → 9_500 SPX shares (1:1).
         assertEq(shares, 9_500e8, "first deposit shares = post-tax net");
         assertEq(vault.balanceOf(alice), shares, "alice share balance");
-        // totalAssets = vault's underlying balance = deposit - fee - burn
-        //   10_000 - 2.5 (fee) - 147.5 (burn) = 9_850 SPX = 9_850e8 raw
-        assertEq(v.totalAssets(), 9_850e8, "totalAssets after fee+burn out");
-        assertEq(vault.totalSupply(), shares, "totalSupply = shares minted");
+        // totalAssets = vault's underlying balance - burnedBalance
+        //   vault balance = 10_000 SPX - 2.5 SPX fee = 9_997.5 SPX = 999_750_000_000 raw
+        //   burnedBalance = 147.5 SPX = 14_750_000_000 raw (locked in vault)
+        //   totalAssets = 999_750_000_000 - 14_750_000_000 = 985_000_000_000 raw
+        //   = 9_500e8 (backing 9_500 shares) + 350e8 (dividend pool) + 147.5e8 (locked burn)
+        //   - 2.5e8 (the fee portion that already left the vault)
+        //   = 9_850 SPX total
+        assertEq(v.totalAssets(), 985_000_000_000, "totalAssets after fee out + burn locked");
+        assertEq(vault.totalSupply(), shares, "totalSupply = shares minted (no dead share)");
     }
 
     function test_entry_tax_split_is_correct() public {
@@ -107,20 +116,23 @@ contract DHPImplementationTest is Test {
         // 5% entry tax = 500 SPX tax = 5_000_000_000 raw
         //   dividend share = 70% of 500 SPX = 350 SPX = 3_500_000_000 raw → stays in vault
         //   protocol fee   = 0.5% of 500 SPX = 2.5 SPX = 250_000_000 raw → feeCollector
-        //   burn           = 500 - 350 - 2.5 = 147.5 SPX = 14_750_000_000 raw → BURN_SINK
+        //   burn           = 500 - 350 - 2.5 = 147.5 SPX = 14_750_000_000 raw → LOCKED IN VAULT
+        //   (no longer sent to BURN_SINK because that would DoS on USDT/USDC/BUSD
+        //    which blacklist 0x…dEaD — see audit fix C-2)
         uint256 depositAmt = 10_000e8;
         uint256 feeCollectorBefore = token.balanceOf(address(feeCollector));
-        uint256 burnBefore = token.balanceOf(BURN_SINK);
 
         vm.prank(alice);
         v.deposit(depositAmt, alice);
 
         assertEq(token.balanceOf(address(feeCollector)) - feeCollectorBefore, 250_000_000, "protocol fee = 0.5% of 500 SPX tax (2.5 SPX)");
-        assertEq(token.balanceOf(BURN_SINK) - burnBefore, 14_750_000_000, "burn = 500 - 350 - 2.5 SPX (147.5 SPX)");
-        // Vault holds 10_000 SPX - 2.5 fee - 147.5 burn = 9_850 SPX = 9_850e8 raw
-        //   = 9_500e8 (backing 9_500 shares) + 350e8 (dividend pool sitting in vault)
-        //   = 9_850e8 raw
-        assertEq(token.balanceOf(address(vault)), 9_850e8, "vault balance = dividend pool + share backing");
+        // The burn is locked in the vault (not sent to any address). Verify via
+        // the burnedBalance public storage variable.
+        assertEq(vault.burnedBalance(), 14_750_000_000, "burnedBalance = 500 - 350 - 2.5 SPX (147.5 SPX locked)");
+        // Vault holds 10_000 SPX minus the 2.5 SPX fee that was sent to feeCollector.
+        assertEq(token.balanceOf(address(vault)), 999_750_000_000, "vault balance = 10_000 SPX - 2.5 SPX fee");
+        // totalAssets() = vault balance - burnedBalance = 9997.5 - 147.5 = 9850 SPX = 985_000_000_000 raw
+        assertEq(v.totalAssets(), 985_000_000_000, "totalAssets = balance - burned");
     }
 
     function test_dividend_accrual_on_deposit() public {
@@ -305,7 +317,8 @@ contract DHPImplementationTest is Test {
             exitTaxBps: 100,
             dividendShareBps: 7_000
         });
-        address fotVault = factory.createVault(address(fot), cfg);
+        uint256 creationFee = factory.VAULT_CREATION_FEE();
+        address fotVault = factory.createVault{value: creationFee}(address(fot), cfg);
         fot.mint(alice, 1_000e18);
         vm.prank(alice);
         fot.approve(fotVault, type(uint256).max);
