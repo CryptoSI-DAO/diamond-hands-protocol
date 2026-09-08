@@ -6,21 +6,21 @@
   "date": "2026-09-07",
   "contracts": {
     "DHPImplementation": {
-      "address": "0x8087317540a6a536a2a88ebf9a2174a95833bf36",
-      "txHash": "0xdb91a05dc4d73fded1a97f9fce4a00d9b828448cc1180c7fe130a4d2ba970e8f",
+      "address": "0xaa5a3a495dadbeb4c5256c0e62ae0603d53f714b",
+      "txHash": "0x5e6c817d3f198b09443e17d8d704efa04aa88edaf58eadce8ff07b074193b2aa",
       "verified": "sourcify:exact_match"
     },
     "DHPFeeCollector": {
-      "address": "0xcfabbd5f1c1bf369ccdbfacf798dcf79ba9e31ab",
-      "txHash": "0x5e153630e74a09f75c735887182623dc1a5381d5631174bab0e43c9ee0d46d14",
+      "address": "0xc6071346a5bb93bf1cc915124050004a268c4d37",
+      "txHash": "0x12af8c32e74d3b8ef0f0f855231fd14a83e28dbc2ed1b8f4e87aaa2ee27b284d",
       "verified": "sourcify:exact_match"
     },
     "DHPFactory": {
-      "address": "0x8eb10373b3e9fcf99391f32a9c3560334adab120",
+      "address": "0xf98a8db0b6a2be70e259992be11c252dbeccaa4d",
       "txHash": "0xc316cefa3b21a5566f10c2a1b2e2f7fe2589e5c30de416460469400f52f8d21c",
       "verified": "sourcify:exact_match",
-      "implementation": "0x8087317540a6a536a2a88ebf9a2174a95833bf36",
-      "feeCollector": "0xcfabbd5f1c1bf369ccdbfacf798dcf79ba9e31ab"
+      "implementation": "0xaa5a3a495dadbeb4c5256c0e62ae0603d53f714b",
+      "feeCollector": "0xc6071346a5bb93bf1cc915124050004a268c4d37"
     }
   },
   "tests": {
@@ -32,12 +32,13 @@
       "DHPFeeCollector": 19
     }
   },
+  "auditPasses": ["v1.0", "v1.1", "v1.2", "v1.2.1", "v1.2.2"],
   "auditFixes": {
     "v1.0_critical_and_high": [
-      "C-1: mint() ordering — _distributeTax → _accrueDividend → _mint",
-      "C-2: BURN_SINK blacklist — lock-in-vault model with burnedBalance accumulator",
-      "H-1: createVault griefing — 0.001 ETH creation fee (exact amount, no refund)",
-      "H-3: Inflation attack — per-vault minFirstDeposit = 10^decimals (1.0 token unit)"
+      "C-1: mint() ordering",
+      "C-2: BURN_SINK blacklist",
+      "H-1: createVault griefing — 0.001 ETH creation fee",
+      "H-3: Inflation attack — per-vault minFirstDeposit = 10^decimals"
     ],
     "v1.1_remaining": [
       "C-NEW-1: totalAssets() reverts loudly on rebasing-token underflow",
@@ -48,6 +49,10 @@
     "v1.2.1_carried_mediums": [
       "M-CARRIED-1: acceptFeesFromTransfer per-vault flag (default: false/strict)",
       "M-CARRIED-2: claimDividend(minAmountOut) with slippage protection"
+    ],
+    "v1.2.2_final_fix": [
+      "M-NEW-2 (Addendum A1): deposit() share conversion moved to PRE-DEPOSIT state (before pull + before distributeTax)",
+      "Fuzz harness DHPFuzzWalk.t.sol (1000-run probe): token conservation, full-redemption solvency, burn-lock integrity, dividend-ledger sanity"
     ]
   },
   "smokeTest": {
