@@ -10,13 +10,13 @@
 
 ## 📍 Live deployments (Base Sepolia testnet)
 
-The **v1.2.2 changes are code + docs changes with no storage-layout impact on the deployed v1.2.1 bytecode paths** — but they do change bytecode (removed surface), so the addresses below serve the **v1.2.1 build** until the v1.2.2 redeploy. Redeploy before further testnet use; **never** reuse v1.2.1 addresses on mainnet.
+## 📍 Live deployments (Base Sepolia testnet) — v1.2.2
 
 | Contract | Address | Verified | Build |
 |---|---|---|---|
-| **DHPImplementation** | [`0x8087317540a6a536a2a88ebf9a2174a95833bf36`](https://base-sepolia.blockscout.com/address/0x8087317540a6a536a2a88ebf9a2174a95833bf36) | ✅ Sourcify exact_match | v1.2.1 |
-| **DHPFeeCollector** | [`0xcfabbd5f1c1bf369ccdbfacf798dcf79ba9e31ab`](https://base-sepolia.blockscout.com/address/0xcfabbd5f1c1bf369ccdbfacf798dcf79ba9e31ab) | ✅ Sourcify exact_match | v1.2.1 |
-| **DHPFactory** | [`0x8eb10373b3e9fcf99391f32a9c3560334adab120`](https://base-sepolia.blockscout.com/address/0x8eb10373b3e9fcf99391f32a9c3560334adab120) | ✅ Sourcify exact_match | v1.2.1 |
+| **DHPImplementation** | [`0xaa5a3a495dadbeb4c5256c0e62ae0603d53f714b`](https://base-sepolia.blockscout.com/address/0xaa5a3a495dadbeb4c5256c0e62ae0603d53f714b) | ✅ Sourcify exact_match | v1.2.2 |
+| **DHPFeeCollector** | [`0xc6071346a5bb93bf1cc915124050004a268c4d37`](https://base-sepolia.blockscout.com/address/0xc6071346a5bb93bf1cc915124050004a268c4d37) | ✅ Sourcify exact_match | v1.2.2 |
+| **DHPFactory** | [`0xf98a8db0b6a2be70e259992be11c252dbeccaa4d`](https://base-sepolia.blockscout.com/address/0xf98a8db0b6a2be70e259992be11c252dbeccaa4d) | ✅ Sourcify exact_match | v1.2.2 |
 
 **Mainnet: not yet deployed.** Awaiting external audit + DAO multisig setup on Base.
 
