@@ -50,11 +50,13 @@ The original v1 implementation had `_accrueDividend` and `_convertToShares` read
 ### Fix for #26 (branch `fix/26-unclaimed-out-of-backing`)
 `totalAssets()` now returns `balance − burnedBalance − totalUnclaimed`, where `totalUnclaimed` is a global reserve of accrued-but-unclaimed dividend IOUs (reserved in full at each `_accrueDividend`, released on `claimDividend`). Invariant `balance ≥ burnedBalance + totalUnclaimed` now holds by construction, which (a) makes every claim payable — closing the death-spiral freeze window where the burn accumulator could outrun backing while IOUs sat inside it, and (b) keeps index-floor dust (I-NEW-5) inside the claim reserve instead of backing shares. Regressions: `test_issue26_*` (3 tests). Behavior note: share-price monotonicity under pure exits holds only within per-event index dust (bounded by supply−1 wei); exactness lives in the balance-cover claim.
 
-## Test Coverage (54 tests, all passing)
+## Test Coverage (75 tests, all passing)
 
-- **15** `DHPImplementation.t.sol` — first-deposit, tax split correctness, dividend accrual, pro-rata distribution, claim flow, withdraw/redeem, transfer accounting, fee-on-transfer rejection, pause, zero-amount, zero-address, share-price non-inflation
-- **20** `DHPFactory.t.sol` — clone deploy, registration, dual vaults, event emission, duplicate-token rejection, zero-token rejection, tax-config validation (entry/exit/dividend bounds), zero-tax config, max-valid-tax config, decimals boundaries, reverting decimals, Ownable2Step, EIP-1167 45-byte proxy size, verified-flag admin
-- **19** `DHPFeeCollector.t.sol` — initial state, zero-treasury rejection, sweep full/zero/owner-only, sweepTo, per-token overrides, default treasury update, native ETH sweep, hooks, view helpers, total-swept accumulation
+- **28** `DHPImplementation.t.sol` — first-deposit, tax split correctness, dividend accrual, pro-rata distribution, claim flow, withdraw/redeem, transfer accounting, fee-on-transfer rejection, pause, zero-amount, zero-address, share-price non-inflation, #26 unclaimed-reserve regressions (ledger tracking, mass-exit backing invariant, price monotonicity within index dust)
+- **25** `DHPFactory.t.sol` — clone deploy, registration, dual vaults, event emission, duplicate-token rejection, zero-token rejection, tax-config validation (entry/exit/dividend bounds), zero-tax config, max-valid-tax config, decimals boundaries, reverting decimals, Ownable2Step, EIP-1167 45-byte proxy size, verified-flag admin
+- **18** `DHPFeeCollector.t.sol` — initial state, zero-treasury rejection, sweep full/zero/owner-only, sweepTo, per-token overrides, default treasury update, native ETH sweep, hooks, view helpers, total-swept accumulation
+- **2** `DHPV122AuditTest.t.sol` — pinned v1.2.2 audit behaviors
+- **2** `DHPFuzzWalk.t.sol` — 256-run random deposit/redeem/claim walks with cross-call consistency checks
 
 Run: `forge test` (no flags needed).
 
