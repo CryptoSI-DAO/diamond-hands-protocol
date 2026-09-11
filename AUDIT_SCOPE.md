@@ -47,6 +47,9 @@ In **all four** user-facing methods (`deposit`, `mint`, `withdraw`, `redeem`), t
 
 The original v1 implementation had `_accrueDividend` and `_convertToShares` reading `totalSupply` and `totalAssets` BEFORE `_distributeTax` sent out the fee + burn, which caused new depositors to receive fewer shares than they should have (diluted by soon-to-leave tokens). The v1.1 fix is in commit history and verified by tests + on-chain smoke test.
 
+### Fix for #26 (branch `fix/26-unclaimed-out-of-backing`)
+`totalAssets()` now returns `balance − burnedBalance − totalUnclaimed`, where `totalUnclaimed` is a global reserve of accrued-but-unclaimed dividend IOUs (reserved in full at each `_accrueDividend`, released on `claimDividend`). Invariant `balance ≥ burnedBalance + totalUnclaimed` now holds by construction, which (a) makes every claim payable — closing the death-spiral freeze window where the burn accumulator could outrun backing while IOUs sat inside it, and (b) keeps index-floor dust (I-NEW-5) inside the claim reserve instead of backing shares. Regressions: `test_issue26_*` (3 tests). Behavior note: share-price monotonicity under pure exits holds only within per-event index dust (bounded by supply−1 wei); exactness lives in the balance-cover claim.
+
 ## Test Coverage (54 tests, all passing)
 
 - **15** `DHPImplementation.t.sol` — first-deposit, tax split correctness, dividend accrual, pro-rata distribution, claim flow, withdraw/redeem, transfer accounting, fee-on-transfer rejection, pause, zero-amount, zero-address, share-price non-inflation

@@ -31,6 +31,12 @@ interface IDHPVault {
     /// @notice Cumulative dividends per share, scaled 1e18.
     function rewardPerTokenStored() external view returns (uint256);
 
+    /// @notice Global reserve of accrued-but-unclaimed dividend IOUs (issue #26).
+    ///         Excluded from `totalAssets()` so claims are always payable by
+    ///         construction. Read-only convenience for indexers/UIs; invariant:
+    ///         `token.balanceOf(vault) >= burnedBalance + totalUnclaimed`.
+    function totalUnclaimed() external view returns (uint256);
+
     /// @notice Total dividends ever distributed (tax inflows minus protocol share).
     function totalDividendsDistributed() external view returns (uint256);
 
