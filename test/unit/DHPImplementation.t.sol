@@ -440,7 +440,7 @@ contract DHPImplementationTest is Test {
         assertLt(balAfter, vault.burnedBalance(), "rebase simulated");
 
         // totalAssets() should now REVERT, not silently return 0.
-        vm.expectRevert("DHP: token balance below burn accumulator (rebase or accounting issue)");
+        vm.expectRevert("DHP: token balance below burn + unclaimed liabilities");
         v.totalAssets();
     }
 
@@ -568,6 +568,101 @@ contract DHPImplementationTest is Test {
         vm.prank(alice);
         vm.expectRevert();
         IDHPVault(fotVault).deposit(100e18, alice);
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // Issue #26: unclaimed dividends excluded from backing
+    // ──────────────────────────────────────────────────────────────────────────
+
+    /// @dev #26: every dividend accrual must move 1:1 into `totalUnclaimed`,
+    ///      and a successful claim must release the paid amount.
+    function test_issue26_unclaimed_ledger_tracks_accrual_and_claim() public {
+        assertEq(vault.totalUnclaimed(), 0, "starts empty");
+        // Seed supply first: dividend accrual requires existing shares
+        // (first depositor's entry tax has no one to accrue to).
+        vm.prank(bob);
+        v.deposit(10_000e8, bob);
+        uint256 afterSeed = vault.totalUnclaimed();
+
+        vm.prank(alice);
+        v.deposit(10_000e8, alice);
+        uint256 depAmt = 10_000e8;
+        uint256 tax = (depAmt * ENTRY_TAX) / 10_000;
+        uint256 divPortion = (tax * DIV_SHARE) / 10_000;
+        assertEq(vault.totalUnclaimed(), afterSeed + divPortion, "full dividend portion reserved");
+
+        // bob accrued from alice's entry tax — claiming releases the reserve
+        vm.prank(bob);
+        v.claimDividend();
+        assertLe(vault.totalUnclaimed(), afterSeed + divPortion, "release bounded by reserve");
+        assertLt(vault.totalUnclaimed(), afterSeed + divPortion, "paid amount released");
+    }
+
+    /// @dev #26 core invariant: `balance >= burnedBalance + totalUnclaimed`
+    ///      through a churn loop, and a mass exit with unclaimed IOUs
+    ///      outstanding can no longer produce an unfunded claim (the old
+    ///      accounting let the burn accumulator outrun backing and freeze
+    ///      the vault).
+    function test_issue26_backing_invariant_survives_mass_exit() public {
+        vm.prank(alice); v.deposit(50_000e8, alice);
+        vm.prank(bob);   v.deposit(50_000e8, bob);
+        vm.prank(carol); v.deposit(50_000e8, carol);
+
+        // bob + carol exit EVERYTHING without ever claiming
+        // (balances read BEFORE pranks: prank is consumed by any next call,
+        // including balanceOf staticcalls)
+        uint256 bobShares = vault.balanceOf(bob);
+        uint256 carolShares = vault.balanceOf(carol);
+        vm.prank(bob);   v.redeem(bobShares, bob, bob);
+        vm.prank(carol); v.redeem(carolShares, carol, carol);
+
+        // the invariant totalAssets() enforces — checked explicitly here
+        assertGe(
+            token.balanceOf(address(vault)),
+            vault.burnedBalance() + vault.totalUnclaimed(),
+            "balance covers burn + IOUs"
+        );
+        // vault is live, not frozen
+        assertGt(v.totalAssets(), 0, "no freeze");
+        // alice (sole remaining holder) can claim her full IOU
+        uint256 owed = pending(alice);
+        assertGt(owed, 0, "alice accrued dividends");
+        vm.prank(alice);
+        uint256 got = v.claimDividend();
+        assertEq(got, owed, "full IOU paid");
+    }
+
+    /// @dev #26 companion: with claims settled, share price is monotone
+    ///      non-decreasing across a pure-exit sequence (burn + exit taxes
+    ///      accrue to stayers; UP-rounding favors the vault).
+    function test_issue26_price_never_dips_when_holders_claim() public {
+        vm.prank(bob);   v.deposit(5_000e8, bob);
+        vm.prank(carol); v.deposit(5_000e8, carol);
+        vm.prank(alice); v.deposit(10_000e8, alice);
+
+        uint256 priceBefore = (v.totalAssets() * 1e18) / vault.totalSupply();
+
+        // everyone claims (IOUs now funded by construction), then bob+carol exit
+        vm.prank(bob);   v.claimDividend();
+        vm.prank(carol); v.claimDividend();
+        uint256 bobShares = vault.balanceOf(bob);
+        uint256 carolShares = vault.balanceOf(carol);
+        vm.prank(bob);   v.redeem(bobShares, bob, bob);
+        vm.prank(carol); v.redeem(carolShares, carol, carol);
+        vm.prank(alice); v.claimDividend();
+
+        uint256 priceAfter = (v.totalAssets() * 1e18) / vault.totalSupply();
+        // Index-floor dust (I-NEW-5): each claim event can strand up to
+        // supply-1 wei of the reserved dividend (floored per-holder accrual).
+        // Bound: 3 tax events * supply < 1e9 units at 1e18 scale — economic
+        // monotonicity holds within dust; the invariant below is exact.
+        uint256 dustAllowance = 1e9;
+        assertGe(priceAfter + dustAllowance, priceBefore, "price monotone within index dust");
+        assertGe(
+            token.balanceOf(address(vault)),
+            vault.burnedBalance() + vault.totalUnclaimed(),
+            "invariant intact"
+        );
     }
 
     // ──────────────────────────────────────────────────────────────────────────

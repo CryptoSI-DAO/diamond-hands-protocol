@@ -123,6 +123,20 @@ contract DHPImplementation is ERC20, ReentrancyGuardTransient, Ownable, IDHPVaul
     ///      protocol on tokens like USDT/USDC that blacklist 0x…dEaD).
     uint256 public burnedBalance;
 
+    /// @dev Global ledger of dividend IOUs accrued to holders but not yet
+    ///      paid out (issue #26). Sum of all `rewards[account]` entries,
+    ///      maintained incrementally: += dividend portion at every
+    ///      `_accrueDividend()`, -= amount at every successful
+    ///      `claimDividend()`. These tokens are still in the vault's ERC-20
+    ///      balance but are contractually owed to specific holders — so they
+    ///      must NOT back anyone's shares. Excluding them from
+    ///      `totalAssets()` guarantees `balance >= burnedBalance +
+    ///      totalUnclaimed` by construction, which makes every claim
+    ///      always-payable and closes the death-spiral freeze window where
+    ///      burn ratchets could previously outrun the balance while IOUs
+    ///      sat inside backing.
+    uint256 public totalUnclaimed;
+
     /// @dev The underlying token this vault wraps. Set in `initialize()`.
     IERC20 internal _assetToken;
 
@@ -260,11 +274,17 @@ contract DHPImplementation is ERC20, ReentrancyGuardTransient, Ownable, IDHPVaul
     ///         publishing inflated numbers. (Audit L-NEW-3.)
     function totalAssets() public view returns (uint256) {
         uint256 bal = _assetToken.balanceOf(address(this));
+        // (issue #26) Unclaimed dividend IOUs are owed to specific holders and
+        // must not back anyone's shares. Requiring bal >= burnedBalance +
+        // totalUnclaimed makes every claim payable by construction and stops
+        // the burn accumulator from ever outrunning unencumbered backing —
+        // previously a sustained death spiral (mass exits, nobody claiming)
+        // could freeze the vault here (loud revert, but a freeze all the same).
         require(
-            bal >= burnedBalance,
-            "DHP: token balance below burn accumulator (rebase or accounting issue)"
+            bal >= burnedBalance + totalUnclaimed,
+            "DHP: token balance below burn + unclaimed liabilities"
         );
-        return bal - burnedBalance;
+        return bal - burnedBalance - totalUnclaimed;
     }
 
     /// @dev Per-vault minimum first-deposit size (in raw token units). Set in
@@ -575,6 +595,12 @@ contract DHPImplementation is ERC20, ReentrancyGuardTransient, Ownable, IDHPVaul
         if (supply > 0 && dividendPortion > 0) {
             rewardPerTokenStored += Math.mulDiv(dividendPortion, PRECISION, supply);
             totalDividendsDistributed += dividendPortion;
+            // (issue #26) Reserve the FULL dividend portion. Per-holder IOUs
+            // accrue lazily via the index and are floored, so the exact sum of
+            // `rewards[...]` is ≤ dividendPortion; reserving the whole amount
+            // is the conservative direction — index dust (I-NEW-5) now sits
+            // in the claim reserve instead of backing shares.
+            totalUnclaimed += dividendPortion;
         }
     }
 
@@ -618,6 +644,10 @@ contract DHPImplementation is ERC20, ReentrancyGuardTransient, Ownable, IDHPVaul
         if (amount == 0) revert NoPendingDividend();
         if (amount < minAmountOut) revert InsufficientClaimAmount(minAmountOut, amount);
         rewards[msg.sender] = 0;
+        // (issue #26) Release this claim's reservation. The subtraction is
+        // checked: totalUnclaimed always ≥ sum of outstanding IOUs because
+        // `_accrueDividend` reserves the full (unfloored) dividend portion.
+        totalUnclaimed -= amount;
         uint256 preBal = _assetToken.balanceOf(msg.sender);
         _assetToken.safeTransfer(msg.sender, amount);
         uint256 postBal = _assetToken.balanceOf(msg.sender);
