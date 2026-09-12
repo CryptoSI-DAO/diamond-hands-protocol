@@ -1,38 +1,52 @@
 {
-  "version": "v1.2.2-all-fixes-complete",
+  "version": "v1.3.0-unclaimed-ious-fixed",
   "network": "base_sepolia",
   "chainId": 84532,
-  "deployer": "0x25c7F96825166Cb5d436D7B6A6C2EDB49221d5b8",
-  "date": "2026-09-07",
+  "deployer": "0xb79DaBCfb185C21485725B81Bd05719940C3273F",
+  "date": "2026-09-12",
   "contracts": {
     "DHPImplementation": {
-      "address": "0xaa5a3a495dadbeb4c5256c0e62ae0603d53f714b",
-      "txHash": "0x5e6c817d3f198b09443e17d8d704efa04aa88edaf58eadce8ff07b074193b2aa",
-      "verified": "sourcify:exact_match"
+      "address": "0xa69459881ec5fc7393e6a9212cb4232ec96b7d96",
+      "txHash": "0xa8022f8efdd251ba5a95181fb98d9004f87de1ea5185f38b355f380340fbb6cb",
+      "blockNumber": 46735879,
+      "gasUsed": 2335726,
+      "verified": "sourcify:match",
+      "explorer": "https://base-sepolia.blockscout.com/address/0xa69459881ec5fc7393e6a9212cb4232ec96b7d96"
     },
     "DHPFeeCollector": {
-      "address": "0xc6071346a5bb93bf1cc915124050004a268c4d37",
-      "txHash": "0x12af8c32e74d3b8ef0f0f855231fd14a83e28dbc2ed1b8f4e87aaa2ee27b284d",
-      "verified": "sourcify:exact_match"
+      "address": "0x412fa6073e977bdf57dabed1336dc7bd70d6e8c1",
+      "txHash": "0x93b832a3bed4e7bc29973bec7f96d2e1905230d1706db53831d5604f3bff11f3",
+      "blockNumber": 46735880,
+      "gasUsed": 759288,
+      "verified": "sourcify:match",
+      "explorer": "https://base-sepolia.blockscout.com/address/0x412fa6073e977bdf57dabed1336dc7bd70d6e8c1",
+      "defaultTreasury": "0x25c7F96825166Cb5d436D7B6A6C2EDB49221d5b8"
     },
     "DHPFactory": {
-      "address": "0xf98a8db0b6a2be70e259992be11c252dbeccaa4d",
-      "txHash": "0xc316cefa3b21a5566f10c2a1b2e2f7fe2589e5c30de416460469400f52f8d21c",
-      "verified": "sourcify:exact_match",
-      "implementation": "0xaa5a3a495dadbeb4c5256c0e62ae0603d53f714b",
-      "feeCollector": "0xc6071346a5bb93bf1cc915124050004a268c4d37"
+      "address": "0x85d6436aabcba27888bc673a7f7cf6be3d2e4b9d",
+      "txHash": "0x7c6bb6f7af894b9b6c3460362f8c94cb2cc773a4efa1134f0143f7f7fbf67a19",
+      "blockNumber": 46735881,
+      "gasUsed": 975966,
+      "verified": "sourcify:match",
+      "explorer": "https://base-sepolia.blockscout.com/address/0x85d6436aabcba27888bc673a7f7cf6be3d2e4b9d",
+      "implementation": "0xa69459881ec5fc7393e6a9212cb4232ec96b7d96",
+      "feeCollector": "0x412fa6073e977bdf57dabed1336dc7bd70d6e8c1",
+      "minAcceptedDecimals": 0,
+      "maxAcceptedDecimals": 18
     }
   },
   "tests": {
-    "total": 70,
-    "passing": 70,
+    "total": 75,
+    "passing": 75,
     "suites": {
       "DHPImplementation": 26,
       "DHPFactory": 25,
-      "DHPFeeCollector": 19
+      "DHPFeeCollector": 19,
+      "DHPV122AuditTest": 2,
+      "DHPFuzzWalkTest": 3
     }
   },
-  "auditPasses": ["v1.0", "v1.1", "v1.2", "v1.2.1", "v1.2.2"],
+  "auditPasses": ["v1.0", "v1.1", "v1.2", "v1.2.1", "v1.2.2", "v1.3.0"],
   "auditFixes": {
     "v1.0_critical_and_high": [
       "C-1: mint() ordering",
@@ -53,10 +67,15 @@
     "v1.2.2_final_fix": [
       "M-NEW-2 (Addendum A1): deposit() share conversion moved to PRE-DEPOSIT state (before pull + before distributeTax)",
       "Fuzz harness DHPFuzzWalk.t.sol (1000-run probe): token conservation, full-redemption solvency, burn-lock integrity, dividend-ledger sanity"
+    ],
+    "v1.3.0_fix_26": [
+      "Fix #26: Unclaimed dividend IOUs excluded from totalAssets() backing",
+      "totalAssets() now strictly counts only assets actually backing shares (balance - unclaimedDividends)",
+      "Added unclaimedDividends() view for transparency"
     ]
   },
   "smokeTest": {
     "passed": true,
-    "notes": "Full lifecycle on Base Sepolia: deploy mock token, create vault, deposit 100k, claim dividend, redeem half. FeeCollector balance accumulating correctly."
+    "notes": "Full Base Sepolia lifecycle: deployed mock token, created vault, deposited twice, accrued and claimed dividends, redeemed half the shares, and confirmed protocol fees reached the FeeCollector."
   }
 }

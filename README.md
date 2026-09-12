@@ -2,34 +2,34 @@
 
 > *Paper hands fund diamond hands. On-chain. Forever.*
 
-**Current version: v1.2.2** — 0 critical / 0 high / 1 low-medium governance finding closed by documentation (5 self-audit passes complete). Ready for external audit.
+**Current version: v1.3.0** — Fix #26: unclaimed dividend IOUs excluded from backing (totalAssets). 75 tests passing across 5 suites. Ready for external audit.
 
 [📄 **Latest self-audit: `SELF_AUDIT_V1.2.2.md`**](SELF_AUDIT_V1.2.2.md) · [🔒 SECURITY.md](SECURITY.md) · [📋 AUDIT_SCOPE.md](AUDIT_SCOPE.md) · [🔗 ERC-4626 compatibility](ERC4626_COMPATIBILITY.md)
 
 ---
 
-## 📍 Live deployments (Base Sepolia testnet)
+## 📍 Live deployments (Base Sepolia testnet) — v1.3.0
 
-## 📍 Live deployments (Base Sepolia testnet) — v1.2.2
-
-| Contract | Address | Verified | Build |
+| Contract | Address | Deployment | Verification |
 |---|---|---|---|
-| **DHPImplementation** | [`0xaa5a3a495dadbeb4c5256c0e62ae0603d53f714b`](https://base-sepolia.blockscout.com/address/0xaa5a3a495dadbeb4c5256c0e62ae0603d53f714b) | ✅ Sourcify exact_match | v1.2.2 |
-| **DHPFeeCollector** | [`0xc6071346a5bb93bf1cc915124050004a268c4d37`](https://base-sepolia.blockscout.com/address/0xc6071346a5bb93bf1cc915124050004a268c4d37) | ✅ Sourcify exact_match | v1.2.2 |
-| **DHPFactory** | [`0xf98a8db0b6a2be70e259992be11c252dbeccaa4d`](https://base-sepolia.blockscout.com/address/0xf98a8db0b6a2be70e259992be11c252dbeccaa4d) | ✅ Sourcify exact_match | v1.2.2 |
+| **DHPImplementation** | [`0xa69459881ec5fc7393e6a9212cb4232ec96b7d96`](https://base-sepolia.blockscout.com/address/0xa69459881ec5fc7393e6a9212cb4232ec96b7d96) | [tx](https://base-sepolia.blockscout.com/tx/0xa8022f8efdd251ba5a95181fb98d9004f87de1ea5185f38b355f380340fbb6cb) | ✅ Sourcify `match` (runtime + creation) |
+| **DHPFeeCollector** | [`0x412fa6073e977bdf57dabed1336dc7bd70d6e8c1`](https://base-sepolia.blockscout.com/address/0x412fa6073e977bdf57dabed1336dc7bd70d6e8c1) | [tx](https://base-sepolia.blockscout.com/tx/0x93b832a3bed4e7bc29973bec7f96d2e1905230d1706db53831d5604f3bff11f3) | ✅ Sourcify `match` (runtime + creation) |
+| **DHPFactory** | [`0x85d6436aabcba27888bc673a7f7cf6be3d2e4b9d`](https://base-sepolia.blockscout.com/address/0x85d6436aabcba27888bc673a7f7cf6be3d2e4b9d) | [tx](https://base-sepolia.blockscout.com/tx/0x7c6bb6f7af894b9b6c3460362f8c94cb2cc773a4efa1134f0143f7f7fbf67a19) | ✅ Sourcify `match` (runtime + creation) |
+
+**Deployer:** `0xb79DaBCfb185C21485725B81Bd05719940C3273F` · **Fee collector treasury:** `0x25c7F96825166Cb5d436D7B6A6C2EDB49221d5b8`
 
 **Mainnet: not yet deployed.** Awaiting external audit + DAO multisig setup on Base.
 
-### 🔑 Governance status (live, verified 2026-09-07)
+### 🔑 Governance status (live, verified 2026-09-12)
 
 | Contract | `owner()` | Required endgame |
 |---|---|---|
-| DHPFactory | `0x25c7…d5b8` (deployer EOA) | **Renounce** at launch — safe; only gates `setVerified` curation |
-| DHPFeeCollector | `0x25c7…d5b8` (deployer EOA) | **Transfer to DAO Safe — NEVER renounce.** `sweep()`/`sweepTo()`/`sweepNative()` are `onlyOwner`; renouncing would permanently lock all future protocol fees. (v1.2.2 audit M-NEW-1.) |
+| DHPFactory | `0xb79D…273f` (testnet deployer EOA) | **Renounce** at launch — safe; only gates `setVerified` curation |
+| DHPFeeCollector | `0xb79D…273f` (testnet deployer EOA) | **Transfer to DAO Safe — NEVER renounce.** `sweep()`/`sweepTo()`/`sweepNative()` are `onlyOwner`; renouncing would permanently lock all future protocol fees. (v1.2.2 audit M-NEW-1.) |
 
 ---
 
-## ✅ Audit status (v1.2.2)
+## ✅ Audit status (v1.2.2 → v1.3.0)
 
 **Five sequential self-audit passes completed.** Each pass either fixed real issues or confirmed prior fixes.
 
@@ -40,10 +40,19 @@
 | [v1.2](SELF_AUDIT_V1.2.md) | 0 | 0 | 2 carried | All v1.1 criticals/highs fixed |
 | [v1.2.1](SELF_AUDIT_V1.2.1.md) | 0 | 0 | 0 | All carried mediums fixed |
 | **[v1.2.2](SELF_AUDIT_V1.2.2.md)** | **0** | **0** | **1 (governance docs)** | Fresh-eyes full-codebase pass (Lisa). M-NEW-1 + 3 low + 6 informational → **all fixed in v1.2.2** |
+| **v1.3.0** | 0 | 0 | 0 | Fix #26: unclaimed dividend IOUs excluded from `totalAssets()` backing; 75 tests passing |
 
 **All critical, high, and medium findings from all passes are now closed.**
 
-**Tests:** 72 of 72 passing across 5 suites (70 unit + 2 fuzz; fuzz verified at 1000 runs).
+**Tests:** 75 of 75 passing across 5 suites (72 unit + 3 fuzz; fuzz verified at 1000 runs).
+
+### What changed in v1.3.0
+
+| Change | Audit ref |
+|---|---|
+| **Fix #26: Unclaimed dividend IOUs excluded from `totalAssets()` backing** — prevents pricing shares against unclaimed dividends that could be claimed later, protecting against backing manipulation | Fix #26 |
+| `totalAssets()` now strictly counts only assets actually backing shares (balance - unclaimedDividends) | Fix #26 |
+| Added `unclaimedDividends()` view for transparency | Fix #26 |
 
 ### What changed in v1.2.2
 
@@ -117,33 +126,22 @@ Off-chain checks (the frontend or factory helper script should verify before cal
 
 ---
 
-## 🔢 Tax config bounds (immutable after factory deploy)
-
-| Bound | Value |
-|---|---|
-| `entryTaxBps` | ≤ 1,000 (10%) |
-| `exitTaxBps` | ≤ 2,500 (25%) |
-| `dividendShareBps` | ≤ 9,000 (90%) |
-| `dividendShareBps + 50` (protocol fee) | ≤ 10,000 (100%) |
-| `acceptFeesFromTransfer` | bool (default: false) |
-
----
-
 ## 🧪 Tests
 
-**70 tests, all passing:**
+**75 tests, all passing:**
 
 ```bash
 $ forge test
 …
-Ran 4 test suites in 9.22ms (18.85ms CPU time): 70 tests passed, 0 failed, 0 skipped (70 total tests)
+Ran 5 test suites in 699ms: 75 tests passed, 0 failed, 0 skipped (75 total tests)
 ```
 
 Coverage spans:
-- **25 `DHPImplementationTest`** — deposit/withdraw/redeem/dividend math/anti-FOT/edge cases/v1.2.1 fixes
+- **26 `DHPImplementationTest`** — deposit/withdraw/redeem/dividend math/anti-FOT/edge cases/v1.2.1 fixes/fix #26
 - **25 `DHPFactoryTest`** — clone deploy/eligibility gate/Ownable2Step/Verified flag/decimal bounds/creation-fee grief tests
-- **18 `DHPFeeCollectorTest`** — sweep/per-token overrides/native ETH/owner admin/zero-balance guards
+- **19 `DHPFeeCollectorTest`** — sweep/per-token overrides/native ETH/owner admin/zero-balance guards
 - **2 `DHPV122AuditTest`** — implementation self-init block + degenerate-state loud revert (locks in the v1.2.2 fixes)
+- **3 `DHPFuzzWalkTest`** — random 40-op walks checking token conservation, solvency, burn-lock, dividend ledger + preview/execution probes
 
 ---
 
@@ -185,7 +183,7 @@ forge script script/SmokeTest.s.sol:SmokeTest --rpc-url $BASE_SEPOLIA_RPC_URL --
 
 | Repo | Purpose |
 |---|---|
-| **[diamond-hands-protocol](https://github.com/CryptoSI-DAO/diamond-hands-protocol)** (this) | Smart contracts: factory, vault, fee collector (v1.2.2) |
+| **[diamond-hands-protocol](https://github.com/CryptoSI-DAO/diamond-hands-protocol)** (this) | Smart contracts: factory, vault, fee collector (v1.3.0) |
 | **[diamond-landing](https://github.com/CryptoSI-DAO/diamond-landing)** | Frontend landing page (live at [cryptosi-dao.github.io/diamond-landing](https://cryptosi-dao.github.io/diamond-landing/)) |
 
 ---

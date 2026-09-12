@@ -24,18 +24,18 @@ SOLC_VERSION = "0.8.28+commit.7893614a"  # foundry build
 
 # (address, contract_identifier, source_path_relative_to_project_root, creation_tx_hash)
 CONTRACTS = [
-    ("0x8087317540a6a536a2a88ebf9a2174a95833bf36",
+    ("0xa69459881ec5fc7393e6a9212cb4232ec96b7d96",
      "src/contracts/DHPImplementation.sol:DHPImplementation",
-     "0xdb91a05dc4d73fded1a97f9fce4a00d9b828448cc1180c7fe130a4d2ba970e8f"),
-    ("0xcfabbd5f1c1bf369ccdbfacf798dcf79ba9e31ab",
+     "0xa8022f8efdd251ba5a95181fb98d9004f87de1ea5185f38b355f380340fbb6cb"),
+    ("0x412fa6073e977bdf57dabed1336dc7bd70d6e8c1",
      "src/contracts/DHPFeeCollector.sol:DHPFeeCollector",
-     "0x5e153630e74a09f75c735887182623dc1a5381d5631174bab0e43c9ee0d46d14"),
-    ("0x8eb10373b3e9fcf99391f32a9c3560334adab120",
+     "0x93b832a3bed4e7bc29973bec7f96d2e1905230d1706db53831d5604f3bff11f3"),
+    ("0x85d6436aabcba27888bc673a7f7cf6be3d2e4b9d",
      "src/contracts/DHPFactory.sol:DHPFactory",
-     "0xc316cefa3b21a5566f10c2a1b2e2f7fe2589e5c30de416460469400f52f8d21c"),
+     "0x7c6bb6f7af894b9b6c3460362f8c94cb2cc773a4efa1134f0143f7f7fbf67a19"),
 ]
 
-PROJECT_ROOT = Path("/tmp/dhp")
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 def build_solc_input(contract_path: str) -> dict:
     """Build a standard-json solc input.
