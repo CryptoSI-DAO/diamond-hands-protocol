@@ -28,6 +28,7 @@ import {IDHPVault} from "../interfaces/IDHPVault.sol";
 ///           • Caller must pass a valid `TaxConfig` (see bounds below)
 ///           • Curator only: max one vault per token — there are no other
 ///             per-token creation limits (#27 free-market policy)
+///           • Payment: exact 0.001 ETH — waived for CRDD tier members (#28)
 ///
 ///         Off-chain checks (BEFORE the on-chain tx) — done by the frontend
 ///         or factory helper script — should verify:
@@ -109,6 +110,20 @@ contract DHPFactory is Ownable2Step, ReentrancyGuardTransient {
     ///         freezes it at its last value.
     address public curator;
 
+    // ──────────────────────────────────────────────────────────────────────────
+    // CRDD minting tier (#28)
+    // ──────────────────────────────────────────────────────────────────────────
+
+    /// @notice CRDD token gating the free-minting tier. ZERO = tier disabled
+    ///         (deploy default; everyone pays the per-vault fee). Owner-wired
+    ///         once CRDD's address is final; renouncing freezes it.
+    address public crddToken;
+
+    /// @notice Balance of `crddToken` (in its own decimals) that unlocks
+    ///         unlimited fee-free vault creation. Set together with
+    ///         `crddToken`; immutable between owner calls.
+    uint256 public crddTierThreshold;
+
     /// @dev Mapping: underlying token → DAO curation flag (frontend-side only).
     mapping(address token => bool verified) public isVerified;
 
@@ -149,6 +164,12 @@ contract DHPFactory is Ownable2Step, ReentrancyGuardTransient {
     event CuratedVaultCreated(address indexed token, address indexed vault);
     event CuratorSet(address indexed previousCurator, address indexed newCurator);
 
+    /// @notice #28: tier config wired or disabled (token=0, threshold=0).
+    event CrddTierConfigured(address indexed token, uint256 threshold);
+
+    /// @notice #28: a tier member minted a vault fee-free.
+    event TierVaultCreated(address indexed creator, address indexed token, address indexed vault);
+
     // ──────────────────────────────────────────────────────────────────────────
     // Errors
     // ──────────────────────────────────────────────────────────────────────────
@@ -163,6 +184,10 @@ contract DHPFactory is Ownable2Step, ReentrancyGuardTransient {
     /// @notice #27: the curator already created their one allowed vault for
     ///         this token (the only per-token creation limit on the factory).
     error CuratorVaultAlreadyExists(address token);
+    /// @notice #28: tier members must send 0 ETH; non-tier send exactly the fee.
+    error UnexpectedMsgValue();
+    /// @notice #28: setCrddToken called with a token but zero threshold.
+    error InvalidCrddConfig();
 
     // ──────────────────────────────────────────────────────────────────────────
     // Constructor
@@ -204,25 +229,28 @@ contract DHPFactory is Ownable2Step, ReentrancyGuardTransient {
     /// @param  token   The underlying ERC-20 the vault will wrap.
     /// @param  cfg     Tax configuration.
     /// @return vault   The address of the newly created clone.
-    /// @dev    Requires `msg.value >= VAULT_CREATION_FEE` (0.001 ETH).
-    ///         Excess ETH is refunded. The fee goes to the DAO treasury
-    ///         (feeCollector) to prevent griefing the registry — without
-    ///         a fee, anyone can call createVault() for any token (including
-    ///         spam tokens they create themselves) and bloat `allVaults` until
-    ///         off-chain indexers (The Graph, frontend loops) hit gas limits.
+    /// @dev    Payment (v1.4 #28): wallets holding `crddTierThreshold` CRDD
+    ///         send exactly 0 ETH; everyone else sends exactly
+    ///         `VAULT_CREATION_FEE` (0.001 ETH). No refunds in either path
+    ///         (v1.2 griefing fix — reverting-receive callers could trap
+    ///         refunds). Tier disabled while `crddToken` is zero.
     function createVault(address token, TaxConfig calldata cfg)
         external
         payable
         nonReentrant
         returns (address vault)
     {
-        // Anti-grief: require EXACTLY the creation fee (no refund). Refunding
-        // excess was removed in v1.2 because contracts with a reverting
-        // receive() function could grief by sending excess and trapping the
-        // refund inside the factory forever. Requiring the exact fee also
-        // avoids the silent-fee-loss risk if the refund call reverts for any
-        // reason (out-of-gas in caller, etc.). Excess ETH is no longer accepted.
-        if (msg.value != VAULT_CREATION_FEE) {
+        // ── #28 CRDD minting tier ────────────────────────────────────────────
+        // Holders of `crddTierThreshold` CRDD (in the token's own decimals)
+        // mint fee-free and must send exactly 0 ETH. Everyone else pays
+        // exactly VAULT_CREATION_FEE. No refunds in either case — the v1.2
+        // griefing rationale (reverting-receive callers trapping refunds)
+        // applies to both paths.
+        bool tierMember = crddToken != address(0) &&
+            IERC20(crddToken).balanceOf(msg.sender) >= crddTierThreshold;
+        if (tierMember) {
+            if (msg.value != 0) revert UnexpectedMsgValue();
+        } else if (msg.value != VAULT_CREATION_FEE) {
             revert InsufficientCreationFee();
         }
 
@@ -295,13 +323,16 @@ contract DHPFactory is Ownable2Step, ReentrancyGuardTransient {
         getToken[vault] = token;
         allVaults.push(vault);
 
-        // Forward the creation fee to the DAO treasury.
-        if (VAULT_CREATION_FEE > 0) {
-            (bool ok, ) = payable(feeCollector).call{value: VAULT_CREATION_FEE}("");
+        // Forward the creation fee to the DAO treasury (#28: tier pays 0).
+        if (msg.value > 0) {
+            (bool ok, ) = payable(feeCollector).call{value: msg.value}("");
             if (!ok) revert FeeTransferFailed();
         }
 
         emit VaultCreated(token, vault, cfg.entryTaxBps, cfg.exitTaxBps, cfg.dividendShareBps);
+        if (tierMember) {
+            emit TierVaultCreated(msg.sender, token, vault);
+        }
         if (isCurator && getCuratedVault[token] == vault) {
             emit CuratedVaultCreated(token, vault);
         }
@@ -331,6 +362,22 @@ contract DHPFactory is Ownable2Step, ReentrancyGuardTransient {
         curator = newCurator;
     }
 
+    /// @notice #28: wire or disable the CRDD minting tier. `token = 0`
+    ///         disables the tier (threshold must then be 0); a non-zero
+    ///         token requires a non-zero threshold. `threshold` is in the
+    ///         CRDD token's own decimals (e.g. 10_000e18 for an 18-decimal
+    ///         CRDD). Owner-gated; renouncing ownership freezes the config.
+    function setCrddToken(address token, uint256 threshold) external onlyOwner {
+        if (token == address(0)) {
+            if (threshold != 0) revert InvalidCrddConfig();
+        } else if (threshold == 0) {
+            revert InvalidCrddConfig();
+        }
+        crddToken = token;
+        crddTierThreshold = threshold;
+        emit CrddTierConfigured(token, threshold);
+    }
+
     // ──────────────────────────────────────────────────────────────────────────
     // View helpers
     // ──────────────────────────────────────────────────────────────────────────
@@ -343,5 +390,12 @@ contract DHPFactory is Ownable2Step, ReentrancyGuardTransient {
     /// @notice Returns the vault address at index `i` in the registry.
     function allVaultsAt(uint256 i) external view returns (address) {
         return allVaults[i];
+    }
+
+    /// @notice #28: whether `who` qualifies for fee-free vault creation
+    ///         right now (false while the tier is disabled).
+    function isTierMember(address who) external view returns (bool) {
+        return crddToken != address(0) &&
+            IERC20(crddToken).balanceOf(who) >= crddTierThreshold;
     }
 }
