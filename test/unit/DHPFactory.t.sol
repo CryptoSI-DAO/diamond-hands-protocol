@@ -2,7 +2,6 @@
 pragma solidity ^0.8.28;
 
 import {Test} from "forge-std/Test.sol";
-import {Clones} from "@openzeppelin/contracts/proxy/Clones.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 
@@ -13,7 +12,9 @@ import {DHPFeeCollector} from "../../src/contracts/DHPFeeCollector.sol";
 import {MockERC20} from "../mocks/MockERC20.sol";
 
 /// @title  DHPFactory unit tests
-/// @notice Exercises the EIP-1167 clone deployment and eligibility gate.
+/// @notice Exercises the EIP-1167 clone deployment, the FIXED tax canon
+///         (#29: no creator configuration), partner-wallet validation and
+///         the eligibility gate.
 contract DHPFactoryTest is Test {
     DHPImplementation internal implementationContract;
     DHPFactory internal factory;
@@ -27,7 +28,8 @@ contract DHPFactoryTest is Test {
     MockERC20 internal tokenB;
     MockERC20 internal token6dec;
     MockERC20 internal token0dec;
-    MockERC20 internal tokenHighTax;
+
+    uint256 internal CREATE_FEE = 0.004 ether;
 
     function setUp() public {
         implementationContract = new DHPImplementation();
@@ -46,57 +48,33 @@ contract DHPFactoryTest is Test {
         token6dec = new MockERC20("Six Dec", "SIX", 6);
         token0dec = new MockERC20("Zero Dec", "ZERO", 0);
 
-        // Fund the test contract so it can pay the vault creation fee (0.004 ETH)
-        // in the tests below.
         vm.deal(address(this), 100 ether);
     }
-    /// @dev Call factory.createVault() with the required 0.004 ETH creation fee.
-    function _createVaultWithFee(address token, DHPFactory.TaxConfig memory cfg) internal returns (address) {
-        // Cache the fee once so we don't trigger an extra staticcall after
-        // `vm.expectRevert` is set (which would consume the expectation).
-        uint256 fee = factory.VAULT_CREATION_FEE();
-        return factory.createVault{value: fee}(token, cfg);
+
+    // ── helpers ──────────────────────────────────────────────────────────
+
+    /// @dev createVault with the exact fee, self-attributed wallets.
+    function _createVaultWithFee(address token) internal returns (address) {
+        return factory.createVault{value: CREATE_FEE}(token, address(this), address(this));
     }
 
-    /// @dev Variant for negative tests that expect a specific non-fee revert.
-    ///      Passes the fee so the call gets past the fee check and hits the
-    ///      actual error we want to test.
-    function _expectRevertWithFee(
-        address token,
-        DHPFactory.TaxConfig memory cfg,
-        bytes memory expectedError
-    ) internal {
-        // Cache the fee before setting expectRevert so the staticcall doesn't
-        // consume the expectation.
-        uint256 fee = factory.VAULT_CREATION_FEE();
-        vm.expectRevert(expectedError);
-        factory.createVault{value: fee}(token, cfg);
+    function _expectRevertWithFee(address token, bytes memory reason) internal {
+        vm.expectRevert(reason);
+        factory.createVault{value: CREATE_FEE}(token, address(this), address(this));
     }
 
-    /// @dev Variant for tests that should fail the fee check itself.
-    function _expectRevertNoFee(
-        address token,
-        DHPFactory.TaxConfig memory cfg,
-        bytes memory expectedError
-    ) internal {
-        vm.expectRevert(expectedError);
-        factory.createVault(token, cfg);
+    function _createAs(address actor, address token, address creator, address platform)
+        internal
+        returns (address)
+    {
+        vm.deal(actor, 1 ether);
+        vm.prank(actor);
+        return factory.createVault{value: CREATE_FEE}(token, creator, platform);
     }
 
-    function _validCfg() internal pure returns (DHPFactory.TaxConfig memory) {
-        return DHPFactory.TaxConfig({
-            entryTaxBps: 500,
-            exitTaxBps: 1_000,
-            dividendShareBps: 7_000,
-            acceptFeesFromTransfer: false
-        });
-    }
+    // ── constructor / deployment ─────────────────────────────────────────
 
-    // ──────────────────────────────────────────────────────────────────────────
-    // Basic mechanics
-    // ──────────────────────────────────────────────────────────────────────────
-
-    function test_factory_metadata() public view {
+    function test_constructor_sets_state() public {
         assertEq(factory.implementation(), address(implementationContract));
         assertEq(factory.feeCollector(), address(feeCollector));
         assertEq(factory.minAcceptedDecimals(), 0);
@@ -105,8 +83,18 @@ contract DHPFactoryTest is Test {
         assertEq(factory.owner(), factoryOwner);
     }
 
+    function test_fixed_tax_canon_constants() public {
+        // #29: the canon is factory-level truth, not per-vault config.
+        assertEq(factory.FIXED_ENTRY_TAX_BPS(), 500);
+        assertEq(factory.FIXED_EXIT_TAX_BPS(), 1_000);
+        assertEq(factory.FIXED_DIVIDEND_SHARE_BPS(), 8_000);
+        assertFalse(factory.FIXED_ACCEPT_FOT());
+    }
+
+    // ── vault creation ───────────────────────────────────────────────────
+
     function test_create_vault_succeeds_and_registers() public {
-        address vaultAddr = _createVaultWithFee(address(tokenA), _validCfg());
+        address vaultAddr = _createVaultWithFee(address(tokenA));
         assertTrue(vaultAddr != address(0), "vault address non-zero");
         assertEq(factory.getVault(address(tokenA)), vaultAddr, "token->vault mapping");
         assertEq(factory.getToken(vaultAddr), address(tokenA), "vault->token mapping");
@@ -114,20 +102,45 @@ contract DHPFactoryTest is Test {
         assertEq(factory.allVaultsAt(0), vaultAddr, "allVaults[0] = vault");
     }
 
-    function test_create_vault_initialises_implementation() public {
-        address vaultAddr = _createVaultWithFee(address(tokenA), _validCfg());
+    function test_create_vault_initialises_fixed_canon_and_wallets() public {
+        address creator = makeAddr("creator");
+        address platform = makeAddr("platform");
+        address vaultAddr = _createAs(address(this), address(tokenA), creator, platform);
         DHPImplementation vault = DHPImplementation(payable(vaultAddr));
+
         assertEq(address(vault.asset()), address(tokenA));
         assertEq(vault.factory(), address(factory));
         assertEq(vault.feeCollector(), address(feeCollector));
+
+        // FIXED canon (#29) — same for every vault, no config was passed.
         assertEq(vault.entryTaxBps(), 500);
         assertEq(vault.exitTaxBps(), 1_000);
-        assertEq(vault.dividendShareBps(), 7_000);
+        assertEq(vault.dividendShareBps(), 8_000);
+        assertFalse(vault.acceptFeesFromTransfer());
+
+        // Partner wallets landed in the vault.
+        assertEq(vault.vaultCreator(), creator);
+        assertEq(vault.creationPlatform(), platform);
+    }
+
+    function test_partner_wallets_validated() public {
+        // Zero creator reverts.
+        vm.expectRevert(DHPFactory.InvalidPartnerWallet.selector);
+        factory.createVault{value: CREATE_FEE}(address(tokenA), address(0), alice);
+
+        // Zero creation platform reverts.
+        vm.expectRevert(DHPFactory.InvalidPartnerWallet.selector);
+        factory.createVault{value: CREATE_FEE}(address(tokenA), alice, address(0));
+
+        // Creator == creation platform is allowed.
+        address v = factory.createVault{value: CREATE_FEE}(address(tokenA), alice, alice);
+        assertEq(DHPImplementation(payable(v)).vaultCreator(), alice);
+        assertEq(DHPImplementation(payable(v)).creationPlatform(), alice);
     }
 
     function test_two_vaults_for_different_tokens() public {
-        address v1 = _createVaultWithFee(address(tokenA), _validCfg());
-        address v2 = _createVaultWithFee(address(tokenB), _validCfg());
+        address v1 = _createVaultWithFee(address(tokenA));
+        address v2 = _createVaultWithFee(address(tokenB));
         assertTrue(v1 != v2, "different addresses");
         assertEq(factory.getVault(address(tokenA)), v1);
         assertEq(factory.getVault(address(tokenB)), v2);
@@ -135,23 +148,17 @@ contract DHPFactoryTest is Test {
     }
 
     function test_create_vault_emits_event() public {
-        // We don't pin the exact clone address (depends on factory nonce which
-        // varies per setUp); just check the event is emitted with the right
-        // shape by capturing it.
-        _createVaultWithFee(address(tokenA), _validCfg());
-        // If we got here without revert, the event was emitted correctly.
+        _createVaultWithFee(address(tokenA));
+        // No revert => event emitted with the right shape.
     }
 
-    // ──────────────────────────────────────────────────────────────────────────
-    // Eligibility gate
-    // ──────────────────────────────────────────────────────────────────────────
+    // ── eligibility gate ─────────────────────────────────────────────────
 
     function test_duplicate_vault_for_token_allowed() public {
         // #27 free-market policy: duplicates are allowed for ANY wallet.
-        address first = _createVaultWithFee(address(tokenA), _validCfg());
-        address second = _createVaultWithFee(address(tokenA), _validCfg());
+        address first = _createVaultWithFee(address(tokenA));
+        address second = _createVaultWithFee(address(tokenA));
 
-        // Distinct vaults, canonical mapping stays on the FIRST, both indexed.
         assertTrue(first != second);
         assertEq(factory.getVault(address(tokenA)), first);
         assertEq(factory.vaultCount(), 2);
@@ -160,88 +167,39 @@ contract DHPFactoryTest is Test {
     }
 
     function test_zero_token_reverts() public {
-        _expectRevertWithFee(address(0), _validCfg(), abi.encodeWithSelector(DHPFactory.InvalidToken.selector));
-    }
-
-    function test_entry_tax_above_max_reverts() public {
-        DHPFactory.TaxConfig memory cfg = _validCfg();
-        cfg.entryTaxBps = 1_001; // > 10%
-        _expectRevertWithFee(address(tokenA), cfg, abi.encodeWithSelector(DHPFactory.InvalidTaxConfig.selector));
-    }
-
-    function test_exit_tax_above_max_reverts() public {
-        DHPFactory.TaxConfig memory cfg = _validCfg();
-        cfg.exitTaxBps = 2_501; // > 25%
-        _expectRevertWithFee(address(tokenA), cfg, abi.encodeWithSelector(DHPFactory.InvalidTaxConfig.selector));
-    }
-
-    function test_dividend_share_above_max_reverts() public {
-        DHPFactory.TaxConfig memory cfg = _validCfg();
-        cfg.dividendShareBps = 9_001; // > 90%
-        _expectRevertWithFee(address(tokenA), cfg, abi.encodeWithSelector(DHPFactory.InvalidTaxConfig.selector));
-    }
-
-    function test_dividend_share_plus_protocol_overflows_reverts() public {
-        // dividendShareBps + 50 (protocol fee) > 10000
-        DHPFactory.TaxConfig memory cfg = _validCfg();
-        cfg.dividendShareBps = 9_950;
-        _expectRevertWithFee(address(tokenA), cfg, abi.encodeWithSelector(DHPFactory.InvalidTaxConfig.selector));
-    }
-
-    function test_zero_tax_config_accepted() public {
-        // All taxes = 0 should be allowed (a vault that does nothing).
-        DHPFactory.TaxConfig memory cfg = DHPFactory.TaxConfig({
-            entryTaxBps: 0,
-            exitTaxBps: 0,
-            dividendShareBps: 0,
-            acceptFeesFromTransfer: false
-        });
-        address v = _createVaultWithFee(address(tokenA), cfg);
-        assertTrue(v != address(0));
-    }
-
-    function test_max_valid_tax_config_accepted() public {
-        // Edge case: entry=10%, exit=25%, dividend=90% -> 90+0.5=90.5% ≤ 100% ✓
-        DHPFactory.TaxConfig memory cfg = DHPFactory.TaxConfig({
-            entryTaxBps: 1_000,
-            exitTaxBps: 2_500,
-            dividendShareBps: 9_000,
-            acceptFeesFromTransfer: false
-        });
-        address v = _createVaultWithFee(address(tokenA), cfg);
-        assertTrue(v != address(0));
+        _expectRevertWithFee(address(0), abi.encodeWithSelector(DHPFactory.InvalidToken.selector));
     }
 
     function test_decimals_boundaries() public {
         // token with 0 decimals — should pass (min=0, max=18)
-        address v0 = _createVaultWithFee(address(token0dec), _validCfg());
+        address v0 = _createVaultWithFee(address(token0dec));
         assertTrue(v0 != address(0));
 
         // token with 6 decimals — should pass
-        address v6 = _createVaultWithFee(address(token6dec), _validCfg());
+        address v6 = _createVaultWithFee(address(token6dec));
         assertTrue(v6 != address(0));
     }
 
     function test_decimals_out_of_range_reverts() public {
-        // Deploy a token with 19 decimals — out of range
         MockERC20 token19 = new MockERC20("Too Many", "MANY", 19);
-        // The contract reverts with InvalidDecimals(19) since 19 > maxAcceptedDecimals (18).
-        _expectRevertWithFee(address(token19), _validCfg(), abi.encodeWithSelector(DHPFactory.InvalidDecimals.selector, 19));
+        _expectRevertWithFee(
+            address(token19),
+            abi.encodeWithSelector(DHPFactory.InvalidDecimals.selector, 19)
+        );
     }
 
     function test_reverting_decimals_reverts() public {
-        // Deploy a token whose decimals() reverts.
         BadDecimalsToken bad = new BadDecimalsToken();
-        _expectRevertWithFee(address(bad), _validCfg(), abi.encodeWithSelector(DHPFactory.InvalidToken.selector));
+        _expectRevertWithFee(address(bad), abi.encodeWithSelector(DHPFactory.InvalidToken.selector));
     }
 
-    // ──────────────────────────────────────────────────────────────────────────
-    // Verified flag (DAO curation)
-    // ──────────────────────────────────────────────────────────────────────────
+    // ── verified flag (DAO curation) ─────────────────────────────────────
 
     function test_set_verified_only_owner() public {
         vm.prank(alice);
-        vm.expectRevert(abi.encodeWithSignature("OwnableUnauthorizedAccount(address)", alice));
+        vm.expectRevert(
+            abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, alice)
+        );
         factory.setVerified(address(tokenA), true);
     }
 
@@ -252,25 +210,19 @@ contract DHPFactoryTest is Test {
         assertFalse(factory.isVerified(address(tokenB)));
     }
 
-    // ──────────────────────────────────────────────────────────────────────────
-    // Clone deployment sanity
-    // ──────────────────────────────────────────────────────────────────────────
+    // ── clone deployment sanity ──────────────────────────────────────────
 
     function test_clone_is_minimal_proxy() public {
-        // The deployed vault address should NOT equal the implementation address.
-        address v = _createVaultWithFee(address(tokenA), _validCfg());
+        address v = _createVaultWithFee(address(tokenA));
         assertTrue(v != address(implementationContract), "clone != implementation");
-        // Code at clone address should be ~45 bytes (EIP-1167 minimal proxy).
         uint256 codeLen;
         assembly {
             codeLen := extcodesize(v)
         }
-        // EIP-1167 minimal proxy bytecode is exactly 45 bytes.
         assertEq(codeLen, 45, "EIP-1167 minimal proxy size");
     }
 
     function test_factory_owner_is_two_step() public {
-        // Ownable2Step: transferOwnership goes to pendingOwner first.
         vm.prank(factoryOwner);
         factory.transferOwnership(alice);
         assertEq(factory.owner(), factoryOwner, "still old owner until accepted");
@@ -281,61 +233,42 @@ contract DHPFactoryTest is Test {
         assertEq(factory.owner(), alice, "ownership transferred after accept");
     }
 
-    // ──────────────────────────────────────────────────────────────────────────
-    // v1.2 audit-fix tests
-    // ──────────────────────────────────────────────────────────────────────────
+    // ── v1.2 audit-fix tests (exact-fee gate) ────────────────────────────
 
     function test_create_vault_exact_fee_succeeds() public {
-        // H-NEW-1 fix: msg.value must EXACTLY match VAULT_CREATION_FEE.
-        address v = _createVaultWithFee(address(tokenA), _validCfg());
+        address v = _createVaultWithFee(address(tokenA));
         assertTrue(v != address(0), "vault created with exact fee");
     }
 
     function test_create_vault_excess_fee_reverts() public {
-        // H-NEW-1 fix: Sending MORE than the required fee reverts (no refund path).
-        // Prevents griefing via bad-receive contracts that would trap the
-        // refund inside the factory forever.
-        // Cache the fee BEFORE setting expectRevert so the staticcall
-        // doesn't consume the expectation.
-        uint256 fee = factory.VAULT_CREATION_FEE();
+        // No refund path — excess ETH reverts (bad-receive griefing fix).
         vm.expectRevert(DHPFactory.InsufficientCreationFee.selector);
-        factory.createVault{value: fee + 1}(address(tokenA), _validCfg());
+        factory.createVault{value: CREATE_FEE + 1}(address(tokenA), address(this), address(this));
     }
 
     function test_create_vault_below_fee_reverts() public {
-        // H-NEW-1 fix: Sending LESS than the required fee reverts.
-        uint256 fee = factory.VAULT_CREATION_FEE();
         vm.expectRevert(DHPFactory.InsufficientCreationFee.selector);
-        factory.createVault{value: fee - 1}(address(tokenA), _validCfg());
+        factory.createVault{value: CREATE_FEE - 1}(address(tokenA), address(this), address(this));
     }
 
     function test_create_vault_zero_fee_reverts() public {
-        // H-NEW-1 fix: Sending 0 reverts.
         vm.expectRevert(DHPFactory.InsufficientCreationFee.selector);
-        factory.createVault(address(tokenA), _validCfg());
+        factory.createVault(address(tokenA), address(this), address(this));
     }
 
     function test_create_vault_bad_receive_does_not_trap_eth() public {
-        // H-NEW-1 fix: With exact-fee requirement, a contract with a reverting
-        // receive() function can still create vaults without griefing.
-        // (Previously: refund would fail, trapping the caller's ETH.)
         BadReceiver bad = new BadReceiver();
-        DHPFactory.TaxConfig memory cfg = _validCfg();
-        // Fund BadReceiver with exactly the fee.
-        vm.deal(address(bad), factory.VAULT_CREATION_FEE());
+        vm.deal(address(bad), CREATE_FEE);
         vm.prank(address(bad));
-        address v = factory.createVault{value: factory.VAULT_CREATION_FEE()}(address(tokenA), cfg);
+        address v = factory.createVault{value: CREATE_FEE}(
+            address(tokenA), address(bad), address(bad)
+        );
         assertTrue(v != address(0), "vault created even with bad receive()");
-
-        // The factory should have received the fee and forwarded it to feeCollector.
-        // No ETH should be stuck in the factory.
         assertEq(address(factory).balance, 0, "no ETH stuck in factory");
     }
 }
 
-/// @notice Mock that always reverts on receive(). Used to test the H-NEW-1
-///         fix: with exact-fee requirement, this contract can create vaults
-///         without griefing the factory by trapping refunds.
+/// @notice Mock that always reverts on receive().
 contract BadReceiver {
     receive() external payable {
         revert("BadReceiver refuses payment");
@@ -343,19 +276,13 @@ contract BadReceiver {
     fallback() external payable {
         revert("BadReceiver refuses payment");
     }
-
-    function dummy() external pure returns (uint256) {
-        return 1;
-    }
 }
 
-/// @notice Mock that reverts on `decimals()` — used to test the factory's
-///         try/catch protection against non-conforming tokens.
+/// @notice Mock that reverts on `decimals()`.
 contract BadDecimalsToken {
     function decimals() external pure returns (uint8) {
         revert("nope");
     }
-    // Stub for IERC20Metadata.symbol()
     function symbol() external pure returns (string memory) { return "BAD"; }
     function name() external pure returns (string memory) { return "Bad"; }
 }

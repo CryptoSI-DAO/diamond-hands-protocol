@@ -25,8 +25,16 @@ interface IDHPVault {
     /// @notice The factory that deployed this vault.
     function factory() external view returns (address);
 
-    /// @notice Fee collector receiving the 0.5% protocol share.
+    /// @notice Fee collector receiving the DAO share of every tax (4% under
+    ///         the #29 fixed split).
     function feeCollector() external view returns (address);
+
+    /// @notice #29: wallet that created this vault (receives 2% of every tax).
+    function vaultCreator() external view returns (address);
+
+    /// @notice #29: frontend/platform that hosted this vault's creation tx
+    ///         (receives 2% of every tax).
+    function creationPlatform() external view returns (address);
 
     /// @notice Cumulative dividends per share, scaled 1e18.
     function rewardPerTokenStored() external view returns (uint256);
@@ -52,8 +60,9 @@ interface IDHPVault {
     /// @notice Configured exit tax in basis points.
     function exitTaxBps() external view returns (uint16);
 
-    /// @notice Configured dividend share of every tax (out of the tax, after the
-    ///         protocol fee is taken). The remainder is sent to the burn sink.
+    /// @notice Configured dividend share of every tax (out of the tax). The
+    ///         remainder splits per the fixed #29 weights: burn / DAO /
+    ///         creator / creation platform / usage platform.
     function dividendShareBps() external view returns (uint16);
 
     // (v1.2.2) `totalAssetsAfterTax()` removed from the interface — it
@@ -85,6 +94,27 @@ interface IDHPVault {
 
     /// @notice Burn `shares` and withdraw `assets` underlying.
     function redeem(uint256 shares, address receiver, address owner) external returns (uint256 assets);
+
+    // ── #29: usage-platform-attributed variants ──────────────────────────
+    // Identical behaviour, plus `usagePlatform` receiving the 2%-of-tax
+    // usage-platform share. A zero address routes that share to the DAO.
+
+    /// @notice #29: deposit, attributing the usage-platform tax share to
+    ///         `usagePlatform` (zero → DAO).
+    function depositWithPlatform(uint256 assets, address receiver, address usagePlatform)
+        external returns (uint256 shares);
+
+    /// @notice #29: mint, attributing the usage-platform tax share.
+    function mintWithPlatform(uint256 shares, address receiver, address usagePlatform)
+        external returns (uint256 assets);
+
+    /// @notice #29: withdraw, attributing the usage-platform tax share.
+    function withdrawWithPlatform(uint256 assets, address receiver, address owner, address usagePlatform)
+        external returns (uint256 shares);
+
+    /// @notice #29: redeem, attributing the usage-platform tax share.
+    function redeemWithPlatform(uint256 shares, address receiver, address owner, address usagePlatform)
+        external returns (uint256 assets);
 
     /// @notice Claim pending dividends for `msg.sender`. Pays out in the
     ///         underlying token (not shares).
@@ -120,6 +150,20 @@ interface IDHPVault {
     event VaultInitialised(address indexed token, uint16 entryTaxBps, uint16 exitTaxBps, uint16 dividendShareBps);
     event DividendAccrued(address indexed account, uint256 amount);
     event DividendClaimed(address indexed account, uint256 amount);
-    event TaxCollected(uint8 kind, uint256 gross, uint256 dividends, uint256 burned, uint256 protocolFee);
+    /// @notice #29: gross tax split across all six sinks (each value net of
+    ///         the others; dividends + burn + dao + partners == gross).
+    event TaxCollected(
+        uint8 kind,
+        uint256 gross,
+        uint256 dividends,
+        uint256 burned,
+        uint256 daoFee,
+        uint256 creatorFee,
+        uint256 creationPlatformFee,
+        uint256 usagePlatformFee
+    );
+    /// @notice #29: emitted per partner payout. `partner` = 0x0 never emits;
+    ///         DAO fallback payouts emit with role = 3.
+    event PartnerFeeRouted(uint8 indexed role, address indexed partner, uint256 amount);
     event TokensBurned(uint256 amount);
 }

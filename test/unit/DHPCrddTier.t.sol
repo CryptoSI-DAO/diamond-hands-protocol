@@ -48,13 +48,10 @@ contract DHPCrddTierTest is Test {
         crdd.mint(holder, THRESHOLD);
     }
 
-    function _canon() internal pure returns (DHPFactory.TaxConfig memory) {
-        return DHPFactory.TaxConfig({
-            entryTaxBps: 500,
-            exitTaxBps: 1_000,
-            dividendShareBps: 8_000,
-            acceptFeesFromTransfer: false
-        });
+    /// @dev #29: no TaxConfig exists — these two placeholders stand in for
+    ///      the creator + creation-platform wallets (self-attribution).
+    function _canon() internal view returns (address) {
+        return address(this);
     }
 
     function _createAs(address caller, uint256 value, address token)
@@ -62,7 +59,7 @@ contract DHPCrddTierTest is Test {
         returns (address)
     {
         vm.prank(caller);
-        return factory.createVault{value: value}(token, _canon());
+        return factory.createVault{value: value}(token, _canon(), _canon());
     }
 
     function _wireTier() internal {
@@ -83,7 +80,7 @@ contract DHPCrddTierTest is Test {
 
         vm.prank(pleb);
         vm.expectRevert(DHPFactory.InsufficientCreationFee.selector);
-        factory.createVault{value: 0}(address(tokenA), _canon());
+        factory.createVault{value: 0}(address(tokenA), _canon(), _canon());
     }
 
     // ── Admin guards ─────────────────────────────────────────────────────
@@ -153,7 +150,7 @@ contract DHPCrddTierTest is Test {
         _wireTier();
         vm.prank(holder);
         vm.expectRevert(DHPFactory.UnexpectedMsgValue.selector);
-        factory.createVault{value: 0.004 ether}(address(tokenA), _canon());
+        factory.createVault{value: 0.004 ether}(address(tokenA), _canon(), _canon());
     }
 
     // ── Non-members unchanged ────────────────────────────────────────────
@@ -165,7 +162,7 @@ contract DHPCrddTierTest is Test {
         assertTrue(!factory.isTierMember(pleb));
         vm.prank(pleb);
         vm.expectRevert(DHPFactory.InsufficientCreationFee.selector);
-        factory.createVault{value: 0}(address(tokenA), _canon());
+        factory.createVault{value: 0}(address(tokenA), _canon(), _canon());
 
         address v = _createAs(pleb, 0.004 ether, address(tokenA));
         assertTrue(v != address(0));
@@ -204,7 +201,7 @@ contract DHPCrddTierTest is Test {
         // Former member now needs the fee again.
         vm.prank(holder);
         vm.expectRevert(DHPFactory.InsufficientCreationFee.selector);
-        factory.createVault{value: 0}(address(tokenA), _canon());
+        factory.createVault{value: 0}(address(tokenA), _canon(), _canon());
 
         address v = _createAs(holder, 0.004 ether, address(tokenA));
         assertTrue(v != address(0));
@@ -228,7 +225,7 @@ contract DHPCrddTierTest is Test {
         vm.expectRevert(
             abi.encodeWithSelector(DHPFactory.CuratorVaultAlreadyExists.selector, address(tokenA))
         );
-        factory.createVault{value: 0}(address(tokenA), _canon());
+        factory.createVault{value: 0}(address(tokenA), _canon(), _canon());
     }
 
     // ── Fuzz: payment rule tracks the balance state machine ─────────────
@@ -254,7 +251,7 @@ contract DHPCrddTierTest is Test {
         } else {
             vm.prank(traveler);
             vm.expectRevert(DHPFactory.InsufficientCreationFee.selector);
-            factory.createVault{value: 0}(address(tokenA), _canon());
+            factory.createVault{value: 0}(address(tokenA), _canon(), _canon());
         }
     }
 }

@@ -47,13 +47,8 @@ contract DHPFuzzWalkTest is Test {
         vm.deal(address(this), 1 ether);
 
         token = new MockERC20("SPX6900", "SPX", 8);
-        DHPFactory.TaxConfig memory cfg = DHPFactory.TaxConfig({
-            entryTaxBps: 500,
-            exitTaxBps: 1_000,
-            dividendShareBps: 7_000,
-            acceptFeesFromTransfer: false
-        });
-        vault = DHPImplementation(payable(factory.createVault{value: 0.004 ether}(address(token), cfg)));
+        // #29: fixed canon — no TaxConfig, self-attributed wallets.
+        vault = DHPImplementation(payable(factory.createVault{value: 0.004 ether}(address(token), address(this), address(this))));
         v = IDHPVault(address(vault));
 
         actors = [alice, bob, carol];
@@ -120,7 +115,9 @@ contract DHPFuzzWalkTest is Test {
         for (uint256 i = 0; i < actors.length; i++) held += token.balanceOf(actors[i]);
         held += token.balanceOf(address(vault));
         held += token.balanceOf(address(feeCollector));
-        held += token.balanceOf(address(factory));
+        // #29: creator + creation-platform shares pay out to the test
+        // contract (it created the vault), so they belong in the ledger.
+        held += token.balanceOf(address(this));
         assertEq(held, total, "F1: tokens created or destroyed");
 
         // F2: full-redemption promise must be payable.

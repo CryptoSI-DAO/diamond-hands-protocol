@@ -65,9 +65,6 @@ contract DHPFactory is Ownable2Step, ReentrancyGuardTransient {
     // ──────────────────────────────────────────────────────────────────────────
 
     uint16 public constant MAX_ENTRY_TAX_BPS = 1_000;   // 10%
-    uint16 public constant MAX_EXIT_TAX_BPS = 2_500;    // 25%
-    uint16 public constant MAX_DIVIDEND_SHARE_BPS = 9_000; // 90%
-    uint16 public constant PROTOCOL_FEE_BPS = 50;      // 0.5%
 
     /// @dev Creation fee to prevent griefing the registry. ~$12-16 at current
     ///      ETH prices — high enough to make mass-griefing expensive (250
@@ -138,14 +135,20 @@ contract DHPFactory is Ownable2Step, ReentrancyGuardTransient {
     // Structs
     // ──────────────────────────────────────────────────────────────────────────
 
-    struct TaxConfig {
-        uint16 entryTaxBps;
-        uint16 exitTaxBps;
-        uint16 dividendShareBps;
-        /// @dev v1.2.1: If true, the vault accepts tokens with FOT/hook behaviour
-        ///      (rebasing, gas-burn, marketing-fee). Default: false.
-        bool acceptFeesFromTransfer;
-    }
+    // ── #29: FIXED tax canon (Carl: creators cannot configure taxes) ─────
+    //    Every vault ships 5% entry / 10% exit / 80% dividend share — same
+    //    canon the frontend already displays as fixed. Split weights live
+    //    in the vault (#29 constants).
+    uint16 public constant FIXED_ENTRY_TAX_BPS = 500;        // 5%
+    uint16 public constant FIXED_EXIT_TAX_BPS = 1_000;       // 10%
+    uint16 public constant FIXED_DIVIDEND_SHARE_BPS = 8_000; // 80% of tax
+    bool public constant FIXED_ACCEPT_FOT = false;           // strict FOT mode
+
+    /// @notice #29: wallets passed by the creating frontend. Part of the
+    ///         factory's call to the vault's `initialize`, NOT part of the
+    ///         user's create message — users sign the usual flow.
+    address public creatorWallet;
+    address public creationPlatformWallet;
 
     // ──────────────────────────────────────────────────────────────────────────
     // Events
@@ -154,9 +157,8 @@ contract DHPFactory is Ownable2Step, ReentrancyGuardTransient {
     event VaultCreated(
         address indexed token,
         address indexed vault,
-        uint16 entryTaxBps,
-        uint16 exitTaxBps,
-        uint16 dividendShareBps
+        address indexed creatorWallet,
+        address creationPlatformWallet
     );
     event VerifiedSet(address indexed token, bool verified);
 
@@ -177,6 +179,7 @@ contract DHPFactory is Ownable2Step, ReentrancyGuardTransient {
 
     error TokenAlreadyHasVault(address existing);
     error InvalidTaxConfig();
+    error InvalidPartnerWallet();
     error InvalidToken();
     error InvalidCurator();
     error InvalidDecimals(uint8 returned);
@@ -227,20 +230,30 @@ contract DHPFactory is Ownable2Step, ReentrancyGuardTransient {
     // ──────────────────────────────────────────────────────────────────────────
 
     /// @notice Deploy a new Diamond Hands Vault for `token`.
-    /// @param  token   The underlying ERC-20 the vault will wrap.
-    /// @param  cfg     Tax configuration.
-    /// @return vault   The address of the newly created clone.
-    /// @dev    Payment (v1.4 #28): wallets holding `crddTierThreshold` CRDD
-    ///         send exactly 0 ETH; everyone else sends exactly
-    ///         `VAULT_CREATION_FEE` (0.004 ETH). No refunds in either path
-    ///         (v1.2 griefing fix — reverting-receive callers could trap
-    ///         refunds). Tier disabled while `crddToken` is zero.
-    function createVault(address token, TaxConfig calldata cfg)
+    /// @param  token             The underlying ERC-20 the vault will wrap.
+    /// @param  creatorWallet_    #29: wallet earning 2% of every in/out tax.
+    ///                           Set once, immutable, non-zero.
+    /// @param  creationPlatformWallet_ #29: platform earning 2% of every tax.
+    ///                           May equal `creatorWallet_`. Non-zero.
+    /// @return vault             The address of the newly created clone.
+    /// @dev    Taxes are FIXED (#29, Carl): every vault ships 5% entry /
+    ///         10% exit / 80% dividend share / strict FOT mode — there is
+    ///         no TaxConfig to pass. Payment (v1.4 #28): CRDD tier members
+    ///         send exactly 0 ETH; everyone else exactly 0.004 ETH. No
+    ///         refunds. Tier disabled while `crddToken` is zero.
+    function createVault(address token, address creatorWallet_, address creationPlatformWallet_)
         external
         payable
         nonReentrant
         returns (address vault)
     {
+        // ── #29 partner wallets — validated, stored, then encoded into the
+        // vault's immutable config. Not part of the user's create message.
+        if (creatorWallet_ == address(0) || creationPlatformWallet_ == address(0)) {
+            revert InvalidPartnerWallet();
+        }
+        creatorWallet = creatorWallet_;
+        creationPlatformWallet = creationPlatformWallet_;
         // ── #28 CRDD minting tier ────────────────────────────────────────────
         // Holders of `crddTierThreshold` CRDD (in the token's own decimals)
         // mint fee-free and must send exactly 0 ETH. Everyone else pays
@@ -268,11 +281,8 @@ contract DHPFactory is Ownable2Step, ReentrancyGuardTransient {
             curatorVaultCreated[token] = true;
         }
 
-        // Validate tax config against immutable bounds.
-        if (cfg.entryTaxBps > MAX_ENTRY_TAX_BPS) revert InvalidTaxConfig();
-        if (cfg.exitTaxBps > MAX_EXIT_TAX_BPS) revert InvalidTaxConfig();
-        if (cfg.dividendShareBps > MAX_DIVIDEND_SHARE_BPS) revert InvalidTaxConfig();
-        if (cfg.dividendShareBps + PROTOCOL_FEE_BPS > 10_000) revert InvalidTaxConfig();
+        // ── #29 FIXED tax canon — there is no user-supplied TaxConfig.
+        // Every vault ships 5% entry / 10% exit / 80% dividend share.
 
         // Validate the token's `decimals()` return. We require a sane answer
         // between minDecimals and maxDecimals (default [0, 18]). Tokens that
@@ -301,16 +311,17 @@ contract DHPFactory is Ownable2Step, ReentrancyGuardTransient {
         // rejected). Default: false (strict mode, rejects FOT tokens).
         // Factory owner can set true for known-hook tokens.
         uint256 minFirstDeposit = 10 ** IERC20Metadata(token).decimals();
-        bool acceptFeesFromTransfer = cfg.acceptFeesFromTransfer;
         vault = implementation.clone();
         DHPImplementation(payable(vault)).initialize(
             IERC20(token),
             feeCollector,
-            cfg.entryTaxBps,
-            cfg.exitTaxBps,
-            cfg.dividendShareBps,
+            creatorWallet_,
+            creationPlatformWallet_,
+            FIXED_ENTRY_TAX_BPS,
+            FIXED_EXIT_TAX_BPS,
+            FIXED_DIVIDEND_SHARE_BPS,
             minFirstDeposit,
-            acceptFeesFromTransfer
+            FIXED_ACCEPT_FOT
         );
 
         // Register. The FIRST vault for a token is canonical (`getVault`) and
@@ -330,7 +341,7 @@ contract DHPFactory is Ownable2Step, ReentrancyGuardTransient {
             if (!ok) revert FeeTransferFailed();
         }
 
-        emit VaultCreated(token, vault, cfg.entryTaxBps, cfg.exitTaxBps, cfg.dividendShareBps);
+        emit VaultCreated(token, vault, creatorWallet_, creationPlatformWallet_);
         if (tierMember) {
             emit TierVaultCreated(msg.sender, token, vault);
         }
@@ -386,6 +397,16 @@ contract DHPFactory is Ownable2Step, ReentrancyGuardTransient {
     /// @notice Total number of vaults ever deployed (monotonic).
     function vaultCount() external view returns (uint256) {
         return allVaults.length;
+    }
+
+    /// @notice #29: rescue a partner's stuck tax share from a vault (see
+    ///         `DHPImplementation.stuckRevenue`). Owner-gated and
+    ///         registry-checked: `vault` must be a factory-deployed vault.
+    ///         Use cases: creator lost their key, partner got blacklisted,
+    ///         a malicious token hook ate the payout.
+    function sweepVaultStuck(address vault, address partner, address to) external onlyOwner {
+        if (getToken[vault] == address(0)) revert InvalidToken();
+        DHPImplementation(payable(vault)).sweepStuck(partner, to);
     }
 
     /// @notice Returns the vault address at index `i` in the registry.

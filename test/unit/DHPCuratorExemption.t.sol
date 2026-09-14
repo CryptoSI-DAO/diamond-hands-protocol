@@ -45,13 +45,10 @@ contract DHPCuratorExemptionTest is Test {
         vm.deal(squatter, 10 ether);
     }
 
-    function _canon() internal pure returns (DHPFactory.TaxConfig memory) {
-        return DHPFactory.TaxConfig({
-            entryTaxBps: 500,
-            exitTaxBps: 1_000,
-            dividendShareBps: 8_000,
-            acceptFeesFromTransfer: false
-        });
+    /// @dev #29: no TaxConfig exists — these two placeholders stand in for
+    ///      the creator + creation-platform wallets (self-attribution).
+    function _canon() internal view returns (address) {
+        return address(this);
     }
 
     /// @dev Read the fee BEFORE pranking — the constant-getter staticcall
@@ -59,7 +56,7 @@ contract DHPCuratorExemptionTest is Test {
     function _createAs(address caller, address token) internal returns (address) {
         uint256 fee = factory.VAULT_CREATION_FEE();
         vm.prank(caller);
-        return factory.createVault{value: fee}(token, _canon());
+        return factory.createVault{value: fee}(token, _canon(), _canon());
     }
 
     function test_CuratorOverride_HappyPath() public {
@@ -109,7 +106,7 @@ contract DHPCuratorExemptionTest is Test {
         vm.expectRevert(
             abi.encodeWithSelector(DHPFactory.CuratorVaultAlreadyExists.selector, address(tokenA))
         );
-        factory.createVault{value: fee}(address(tokenA), _canon());
+        factory.createVault{value: fee}(address(tokenA), _canon(), _canon());
     }
 
     function test_CuratorFirstCreate_ConsumesExemption() public {
@@ -135,7 +132,7 @@ contract DHPCuratorExemptionTest is Test {
         vm.expectRevert(
             abi.encodeWithSelector(DHPFactory.CuratorVaultAlreadyExists.selector, address(tokenA))
         );
-        factory.createVault{value: fee}(address(tokenA), _canon());
+        factory.createVault{value: fee}(address(tokenA), _canon(), _canon());
     }
 
     function test_NonCurator_DuplicateAllowed_SameActor() public {
@@ -195,7 +192,7 @@ contract DHPCuratorExemptionTest is Test {
         vm.expectRevert(
             abi.encodeWithSelector(DHPFactory.CuratorVaultAlreadyExists.selector, address(tokenA))
         );
-        factory.createVault{value: fee}(address(tokenA), _canon());
+        factory.createVault{value: fee}(address(tokenA), _canon(), _canon());
 
         // New curator CAN use a fresh token's exemption.
         address v = _createAs(newCurator, address(tokenB));
