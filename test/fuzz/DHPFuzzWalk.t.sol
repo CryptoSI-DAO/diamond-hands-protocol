@@ -53,7 +53,7 @@ contract DHPFuzzWalkTest is Test {
             dividendShareBps: 7_000,
             acceptFeesFromTransfer: false
         });
-        vault = DHPImplementation(payable(factory.createVault{value: 0.001 ether}(address(token), cfg)));
+        vault = DHPImplementation(payable(factory.createVault{value: 0.004 ether}(address(token), cfg)));
         v = IDHPVault(address(vault));
 
         actors = [alice, bob, carol];

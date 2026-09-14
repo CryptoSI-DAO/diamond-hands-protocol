@@ -69,11 +69,12 @@ contract DHPFactory is Ownable2Step, ReentrancyGuardTransient {
     uint16 public constant MAX_DIVIDEND_SHARE_BPS = 9_000; // 90%
     uint16 public constant PROTOCOL_FEE_BPS = 50;      // 0.5%
 
-    /// @dev Creation fee to prevent griefing the registry. ~$3 at current ETH
-    ///      prices — high enough to make mass-griefing expensive (~13K vaults
-    ///      per 1 ETH), low enough that legitimate deploys aren't priced out.
+    /// @dev Creation fee to prevent griefing the registry. ~$12-16 at current
+    ///      ETH prices — high enough to make mass-griefing expensive (250
+    ///      vaults per 1 ETH), low enough that legitimate deploys aren't
+    ///      priced out. CRDD tier members (#28) pay nothing instead.
     ///      All proceeds go to the DAO treasury (the feeCollector).
-    uint256 public constant VAULT_CREATION_FEE = 0.001 ether;
+    uint256 public constant VAULT_CREATION_FEE = 0.004 ether;
 
     // ──────────────────────────────────────────────────────────────────────────
     // Mutable configuration (DAO-gated, intended to freeze post-launch)
@@ -231,7 +232,7 @@ contract DHPFactory is Ownable2Step, ReentrancyGuardTransient {
     /// @return vault   The address of the newly created clone.
     /// @dev    Payment (v1.4 #28): wallets holding `crddTierThreshold` CRDD
     ///         send exactly 0 ETH; everyone else sends exactly
-    ///         `VAULT_CREATION_FEE` (0.001 ETH). No refunds in either path
+    ///         `VAULT_CREATION_FEE` (0.004 ETH). No refunds in either path
     ///         (v1.2 griefing fix — reverting-receive callers could trap
     ///         refunds). Tier disabled while `crddToken` is zero.
     function createVault(address token, TaxConfig calldata cfg)

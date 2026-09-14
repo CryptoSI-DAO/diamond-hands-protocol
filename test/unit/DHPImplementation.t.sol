@@ -47,7 +47,7 @@ contract DHPImplementationTest is Test {
             18  // maxDecimals
         );
 
-        // Fund the test contract so it can pay the vault creation fee (0.001 ETH)
+        // Fund the test contract so it can pay the vault creation fee (0.004 ETH)
         // in setUp() and in the FOT test below.
         vm.deal(address(this), 100 ether);
 

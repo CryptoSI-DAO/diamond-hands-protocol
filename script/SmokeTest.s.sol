@@ -35,7 +35,7 @@ contract SmokeTest is Script {
         SmokeTestToken token = new SmokeTestToken();
         console2.log("SmokeTestToken:", address(token));
 
-        // 2. Create a vault for it (pays 0.001 ETH creation fee, fixes H-1).
+        // 2. Create a vault for it (pays the 0.004 ETH creation fee, fixes H-1).
         DHPFactory f = DHPFactory(factoryAddr);
         DHPFactory.TaxConfig memory cfg = DHPFactory.TaxConfig({
             entryTaxBps: 500,

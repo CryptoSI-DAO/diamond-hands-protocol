@@ -78,7 +78,7 @@ contract DHPCrddTierTest is Test {
         assertTrue(!factory.isTierMember(holder));
 
         // Exact-fee path still works, zero-value path still reverts.
-        address v = _createAs(pleb, 0.001 ether, address(tokenA));
+        address v = _createAs(pleb, 0.004 ether, address(tokenA));
         assertTrue(v != address(0));
 
         vm.prank(pleb);
@@ -153,7 +153,7 @@ contract DHPCrddTierTest is Test {
         _wireTier();
         vm.prank(holder);
         vm.expectRevert(DHPFactory.UnexpectedMsgValue.selector);
-        factory.createVault{value: 0.001 ether}(address(tokenA), _canon());
+        factory.createVault{value: 0.004 ether}(address(tokenA), _canon());
     }
 
     // ── Non-members unchanged ────────────────────────────────────────────
@@ -206,7 +206,7 @@ contract DHPCrddTierTest is Test {
         vm.expectRevert(DHPFactory.InsufficientCreationFee.selector);
         factory.createVault{value: 0}(address(tokenA), _canon());
 
-        address v = _createAs(holder, 0.001 ether, address(tokenA));
+        address v = _createAs(holder, 0.004 ether, address(tokenA));
         assertTrue(v != address(0));
     }
 

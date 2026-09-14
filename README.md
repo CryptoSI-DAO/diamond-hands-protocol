@@ -78,7 +78,7 @@
 ```
 DHPImplementation   (immutable logic, deployed ONCE)
         ↓ EIP-1167 clone
-DHPFactory           (clone-deploys a vault per token, owns 0.001 ETH creation fee)
+DHPFactory           (clone-deploys a vault per token, owns 0.004 ETH creation fee)
         ↓
 DHPVault (clone)     (one per ERC-20 token — what users interact with)
         ↓ 0.5% protocol fee
@@ -116,7 +116,7 @@ Each vault enforces a `minFirstDeposit` equal to `10^decimals` (i.e., 1.0 token 
 Before a vault can be created for a token, the factory checks:
 1. **Token must expose `decimals()` returning 0–18.**
 2. **Token must not already have a vault.**
-3. **Exact 0.001 ETH creation fee** is required (no refund path — prevents griefing via bad-receive contracts).
+3. **Exact 0.004 ETH creation fee** is required (no refund path — prevents griefing via bad-receive contracts).
 
 Off-chain checks (the frontend or factory helper script should verify before calling `createVault`):
 1. GoPlus honeypot check passes (`buy_tax=0`, `sell_tax=0`, `cannot_buy=0`).
