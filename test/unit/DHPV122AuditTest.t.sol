@@ -37,7 +37,7 @@ contract DHPV122AuditTest is Test {
             dividendShareBps: 7_000,
             acceptFeesFromTransfer: false
         });
-        vault = DHPImplementation(payable(factory.createVault{value: 0.001 ether}(address(token), cfg)));
+        vault = DHPImplementation(payable(factory.createVault{value: 0.004 ether}(address(token), cfg)));
 
         token.mint(alice, 1_000_000e8);
         vm.prank(alice);

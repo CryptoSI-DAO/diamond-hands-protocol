@@ -46,11 +46,11 @@ contract DHPFactoryTest is Test {
         token6dec = new MockERC20("Six Dec", "SIX", 6);
         token0dec = new MockERC20("Zero Dec", "ZERO", 0);
 
-        // Fund the test contract so it can pay the vault creation fee (0.001 ETH)
+        // Fund the test contract so it can pay the vault creation fee (0.004 ETH)
         // in the tests below.
         vm.deal(address(this), 100 ether);
     }
-    /// @dev Call factory.createVault() with the required 0.001 ETH creation fee.
+    /// @dev Call factory.createVault() with the required 0.004 ETH creation fee.
     function _createVaultWithFee(address token, DHPFactory.TaxConfig memory cfg) internal returns (address) {
         // Cache the fee once so we don't trigger an extra staticcall after
         // `vm.expectRevert` is set (which would consume the expectation).

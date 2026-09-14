@@ -97,7 +97,7 @@ contract DHPCuratorExemptionTest is Test {
         assertEq(factory.allVaultsAt(1), second);
 
         // D3: fee still charged exactly on the override path.
-        assertEq(address(feeCollector).balance - collectorBefore, 0.001 ether);
+        assertEq(address(feeCollector).balance - collectorBefore, 0.004 ether);
     }
 
     function test_CuratorOverride_SecondCreateReverts() public {

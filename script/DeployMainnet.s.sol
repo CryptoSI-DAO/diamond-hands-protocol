@@ -79,7 +79,7 @@ contract DeployMainnetScript is Script {
         require(factory.feeCollector() == address(feeCollector), "DHP: factory.collector mismatch");
         require(factory.minAcceptedDecimals() == 6, "DHP: factory.minDecimals mismatch");
         require(factory.maxAcceptedDecimals() == 18, "DHP: factory.maxDecimals mismatch");
-        require(factory.VAULT_CREATION_FEE() == 0.001 ether, "DHP: creation fee mismatch");
+        require(factory.VAULT_CREATION_FEE() == 0.004 ether, "DHP: creation fee mismatch");
         require(collectorTreasury(feeCollector) == daoTreasury, "DHP: collector.treasury mismatch");
         require(factory.curator() == curator, "DHP: factory.curator mismatch");
         require(factory.owner() == deployer, "DHP: factory.owner mismatch");
@@ -94,7 +94,7 @@ contract DeployMainnetScript is Script {
         console2.log("");
         console2.log("Next steps:");
         console2.log("  1. Verify all 3 contracts on Basescan (forge verify or flatty)");
-        console2.log("  2. Smoke test: createVault() on a real Base token, 0.001 ETH fee");
+        console2.log("  2. Smoke test: createVault() on a real Base token, 0.004 ETH fee");
         console2.log("  3. Factory: keep owned (curation) or renounce - operator decision");
         console2.log("  4. FeeCollector: NEVER renounce; later Ownable2Step to DAO Safe");
         console2.log("     (renouncing locks sweep() forever - audit v1.2.2 M-NEW-1)");
