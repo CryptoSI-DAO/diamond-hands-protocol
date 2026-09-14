@@ -24,6 +24,7 @@ contract DeployScript is Script {
         // Load config from env.
         uint256 pk = vm.envUint("PRIVATE_KEY");
         address daoTreasury = vm.envAddress("DAO_TREASURY_BASE_SEPOLIA");
+        address curator = vm.envAddress("DAO_CURATOR_BASE_SEPOLIA");
         // For testnet we accept arbitrary decimals — mainnet will tune this.
         uint8 minDecimals = 0;
         uint8 maxDecimals = 18;
@@ -42,6 +43,7 @@ contract DeployScript is Script {
         DHPFactory factory = new DHPFactory(
             address(impl),
             address(feeCollector),
+            curator,
             minDecimals,
             maxDecimals
         );

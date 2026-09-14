@@ -43,7 +43,7 @@ contract DHPFuzzWalkTest is Test {
     function setUp() public {
         implementation = new DHPImplementation();
         feeCollector = new DHPFeeCollector(makeAddr("treasury"));
-        factory = new DHPFactory(address(implementation), address(feeCollector), 0, 18);
+        factory = new DHPFactory(address(implementation), address(feeCollector), makeAddr("curator"), 0, 18);
         vm.deal(address(this), 1 ether);
 
         token = new MockERC20("SPX6900", "SPX", 8);

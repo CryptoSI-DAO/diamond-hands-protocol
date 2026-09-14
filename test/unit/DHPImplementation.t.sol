@@ -42,6 +42,7 @@ contract DHPImplementationTest is Test {
         factory = new DHPFactory(
             address(implementation),
             address(feeCollector),
+            makeAddr("curator"),
             0,  // minDecimals
             18  // maxDecimals
         );

@@ -35,12 +35,14 @@ contract DeployMainnetScript is Script {
         uint256 pk = vm.envUint("PRIVATE_KEY");
         address deployer = vm.addr(pk);
         address daoTreasury = vm.envAddress("DAO_TREASURY_BASE_MAINNET");
+        address curator = vm.envAddress("DAO_CURATOR_BASE_MAINNET");
 
         // ---- Pre-flight gates (fail loudly BEFORE any signature) ---------------
         require(block.chainid == 845, "DHP: not Base mainnet (845)");
         require(daoTreasury != address(0), "DHP: treasury is zero address");
         require(daoTreasury != 0x000000000000000000000000000000000000dEaD, "DHP: treasury is 0xdEaD");
         require(daoTreasury != deployer, "DHP: treasury must differ from deployer burner");
+        require(curator != address(0), "DHP: curator is zero address");
         require(block.basefee <= GAS_PRICE_CAP_GWEI * 1 gwei, "DHP: gas spike above cap");
 
         // Mainnet decimals gate: real tokens only. USDC = 6, memes = 18.
@@ -50,6 +52,7 @@ contract DeployMainnetScript is Script {
         console2.log("=== DHP Base Mainnet Deployment ===");
         console2.log("Deployer     :", deployer);
         console2.log("DAO treasury :", daoTreasury);
+        console2.log("Curator      :", curator);
         console2.log("Base fee     :", block.basefee);
 
         // ---- Deploy ------------------------------------------------------------
@@ -60,6 +63,7 @@ contract DeployMainnetScript is Script {
         DHPFactory factory = new DHPFactory(
             address(impl),
             address(feeCollector),
+            curator,
             minDecimals,
             maxDecimals
         );
@@ -77,6 +81,7 @@ contract DeployMainnetScript is Script {
         require(factory.maxAcceptedDecimals() == 18, "DHP: factory.maxDecimals mismatch");
         require(factory.VAULT_CREATION_FEE() == 0.001 ether, "DHP: creation fee mismatch");
         require(collectorTreasury(feeCollector) == daoTreasury, "DHP: collector.treasury mismatch");
+        require(factory.curator() == curator, "DHP: factory.curator mismatch");
         require(factory.owner() == deployer, "DHP: factory.owner mismatch");
         require(feeCollector.owner() == deployer, "DHP: collector.owner mismatch");
 

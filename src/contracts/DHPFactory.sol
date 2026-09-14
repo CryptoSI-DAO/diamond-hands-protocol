@@ -12,8 +12,10 @@ import {DHPImplementation} from "./DHPImplementation.sol";
 import {IDHPVault} from "../interfaces/IDHPVault.sol";
 
 /// @title  DHPFactory
-/// @notice Permissionless deployment of Diamond Hands Vaults. One per ERC-20
-///         on Base (or whichever chain this factory is deployed to).
+/// @notice Permissionless deployment of Diamond Hands Vaults. One vault per
+///         ERC-20 on Base (or whichever chain this factory is deployed to) —
+///         except for the curator (#27), who may create ONE override vault
+///         per token even after a vault exists (anti-squat escape hatch).
 /// @dev    Each `createVault()` call:
 ///           1. Validates the underlying token against the eligibility gate.
 ///           2. Clones the canonical `DHPImplementation` via EIP-1167.
@@ -38,10 +40,10 @@ import {IDHPVault} from "../interfaces/IDHPVault.sol";
 ///           • dividendShareBps ∈ [0, MAX_DIVIDEND_SHARE_BPS=9000] (0–90%)
 ///           • dividendShareBps + 50 (protocol fee) ≤ 10000
 ///
-///         The factory itself is `Ownable2Step` and is intended to be
-///         RENOUNCED post-launch (`renounceOwnership()` to 0x0). The only
-///         owner-gated function is `setVerified(token, bool)` for frontend
-///         curation; renouncing freezes it at the last set of verified tokens.
+///         The factory itself is `Ownable2Step`. Owner-gated functions:
+///         `setVerified(token, bool)` for frontend curation and
+///         `setCurator(address)` for the #27 exemption holder; renouncing
+///         freezes both at their last values.
 contract DHPFactory is Ownable2Step, ReentrancyGuardTransient {
     using Clones for address;
 
@@ -85,7 +87,23 @@ contract DHPFactory is Ownable2Step, ReentrancyGuardTransient {
     // ──────────────────────────────────────────────────────────────────────────
 
     /// @dev Mapping: underlying token → its vault address (zero if none).
+    ///      ALWAYS the FIRST vault created for the token — a curator override
+    ///      vault (#27) registers in `getCuratedVault` instead, never here.
     mapping(address token => address vault) public getVault;
+
+    /// @dev Mapping: underlying token → the curator's override vault (#27).
+    ///      Populated only when the curator uses the one-per-token exemption.
+    mapping(address token => address vault) public getCuratedVault;
+
+    /// @dev Mapping: token → curator exemption consumed flag (#27). Set on the
+    ///      curator's FIRST create for the token via ANY path, enforcing
+    ///      "max one curator vault per token, ever".
+    mapping(address token => bool created) public curatorVaultCreated;
+
+    /// @notice The curator address (#27): exempt from one-vault-per-token,
+    ///         limited to ONE vault per token. Owner-settable (D1); renouncing
+    ///         factory ownership freezes it at its last value.
+    address public curator;
 
     /// @dev Mapping: underlying token → DAO curation flag (frontend-side only).
     mapping(address token => bool verified) public isVerified;
@@ -122,6 +140,11 @@ contract DHPFactory is Ownable2Step, ReentrancyGuardTransient {
     );
     event VerifiedSet(address indexed token, bool verified);
 
+    /// @notice #27: emitted ONLY when the curator used the one-per-token
+    ///         exemption (i.e. a vault for this token already existed).
+    event CuratedVaultCreated(address indexed token, address indexed vault);
+    event CuratorSet(address indexed previousCurator, address indexed newCurator);
+
     // ──────────────────────────────────────────────────────────────────────────
     // Errors
     // ──────────────────────────────────────────────────────────────────────────
@@ -130,9 +153,12 @@ contract DHPFactory is Ownable2Step, ReentrancyGuardTransient {
     error VaultAlreadyExistsForToken(address token);
     error InvalidTaxConfig();
     error InvalidToken();
+    error InvalidCurator();
     error InvalidDecimals(uint8 returned);
     error InsufficientCreationFee();
     error FeeTransferFailed();
+    /// @notice #27: the curator already created their one allowed vault for this token.
+    error CuratorVaultAlreadyExists(address token);
 
     // ──────────────────────────────────────────────────────────────────────────
     // Constructor
@@ -140,22 +166,28 @@ contract DHPFactory is Ownable2Step, ReentrancyGuardTransient {
 
     /// @param implementation_ Canonical DHPImplementation deployed separately.
     /// @param feeCollector_  Protocol fee recipient (immutable).
+    /// @param curator_       Curator for the #27 exemption (mandatory; non-zero).
     /// @param minDecimals     Lower bound for token `decimals()` return.
     /// @param maxDecimals     Upper bound for token `decimals()` return.
     constructor(
         address implementation_,
         address feeCollector_,
+        address curator_,
         uint8 minDecimals,
         uint8 maxDecimals
     ) Ownable(msg.sender) {
         if (implementation_ == address(0) || feeCollector_ == address(0)) {
             revert InvalidToken();
         }
+        if (curator_ == address(0)) {
+            revert InvalidCurator();
+        }
         if (minDecimals > maxDecimals || maxDecimals > 18) {
             revert InvalidToken();
         }
         implementation = implementation_;
         feeCollector = feeCollector_;
+        curator = curator_;
         minAcceptedDecimals = minDecimals;
         maxAcceptedDecimals = maxDecimals;
     }
@@ -191,7 +223,19 @@ contract DHPFactory is Ownable2Step, ReentrancyGuardTransient {
         }
 
         if (token == address(0)) revert InvalidToken();
-        if (getVault[token] != address(0)) revert VaultAlreadyExistsForToken(token);
+
+        // ── #27 curator exemption ────────────────────────────────────────────
+        // The curator may create a vault for a token that already has one
+        // (anti-squat escape hatch), but at most ONE curator vault per token,
+        // enforced by consuming the flag on the curator's FIRST create via
+        // ANY path. Everyone else keeps the strict one-per-token rule.
+        bool isCurator = msg.sender == curator;
+        if (isCurator) {
+            if (curatorVaultCreated[token]) revert CuratorVaultAlreadyExists(token);
+            curatorVaultCreated[token] = true;
+        } else if (getVault[token] != address(0)) {
+            revert VaultAlreadyExistsForToken(token);
+        }
 
         // Validate tax config against immutable bounds.
         if (cfg.entryTaxBps > MAX_ENTRY_TAX_BPS) revert InvalidTaxConfig();
@@ -238,8 +282,14 @@ contract DHPFactory is Ownable2Step, ReentrancyGuardTransient {
             acceptFeesFromTransfer
         );
 
-        // Register.
-        getVault[token] = vault;
+        // Register. A curator OVERRIDE create (#27 — a vault already existed)
+        // registers in `getCuratedVault` and never overwrites `getVault`;
+        // every other path (curator included) owns the canonical mapping.
+        if (isCurator && getVault[token] != address(0)) {
+            getCuratedVault[token] = vault;
+        } else {
+            getVault[token] = vault;
+        }
         getToken[vault] = token;
         allVaults.push(vault);
 
@@ -250,6 +300,9 @@ contract DHPFactory is Ownable2Step, ReentrancyGuardTransient {
         }
 
         emit VaultCreated(token, vault, cfg.entryTaxBps, cfg.exitTaxBps, cfg.dividendShareBps);
+        if (isCurator && getCuratedVault[token] == vault) {
+            emit CuratedVaultCreated(token, vault);
+        }
     }
 
     // ──────────────────────────────────────────────────────────────────────────
@@ -262,6 +315,18 @@ contract DHPFactory is Ownable2Step, ReentrancyGuardTransient {
     function setVerified(address token, bool verified_) external onlyOwner {
         isVerified[token] = verified_;
         emit VerifiedSet(token, verified_);
+    }
+
+    /// @notice #27: reassign the curator (e.g. to a DAO Safe at migration).
+    ///         The new curator does NOT inherit consumed exemptions —
+    ///         `curatorVaultCreated` is per-token and per-factory, so a
+    ///         migrated curator cannot mint a second vault for a token where
+    ///         the exemption was already used. Renouncing ownership freezes
+    ///         the curator at its last value.
+    function setCurator(address newCurator) external onlyOwner {
+        if (newCurator == address(0)) revert InvalidCurator();
+        emit CuratorSet(curator, newCurator);
+        curator = newCurator;
     }
 
     // ──────────────────────────────────────────────────────────────────────────
