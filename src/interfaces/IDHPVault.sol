@@ -95,6 +95,14 @@ interface IDHPVault {
     /// @notice Burn `shares` and withdraw `assets` underlying.
     function redeem(uint256 shares, address receiver, address owner) external returns (uint256 assets);
 
+    /// @notice #29: settle `partner`'s stuck revenue to the partner.
+    ///         Permissionless — anyone may trigger; destination is hardwired.
+    function claimStuck(address partner) external;
+
+    /// @notice #29: sum of all currently-booked stuck revenue (a liability
+    ///         excluded from `totalAssets`).
+    function totalStuckRevenue() external view returns (uint256);
+
     // ── #29: usage-platform-attributed variants ──────────────────────────
     // Identical behaviour, plus `usagePlatform` receiving the 2%-of-tax
     // usage-platform share. A zero address routes that share to the DAO.
@@ -165,5 +173,6 @@ interface IDHPVault {
     /// @notice #29: emitted per partner payout. `partner` = 0x0 never emits;
     ///         DAO fallback payouts emit with role = 3.
     event PartnerFeeRouted(uint8 indexed role, address indexed partner, uint256 amount);
+    event StuckRevenueClaimed(address indexed partner, uint256 amount);
     event TokensBurned(uint256 amount);
 }

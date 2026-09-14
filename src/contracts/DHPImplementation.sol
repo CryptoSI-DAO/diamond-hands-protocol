@@ -161,7 +161,6 @@ contract DHPImplementation is ERC20, ReentrancyGuardTransient, Ownable, IDHPVaul
     // Errors
     // ──────────────────────────────────────────────────────────────────────────
 
-    error OnlyFactory();
     error AlreadyInitialised();
     error InvalidBpsConfiguration();
     error FeeOnTransferToken();
@@ -176,15 +175,6 @@ contract DHPImplementation is ERC20, ReentrancyGuardTransient, Ownable, IDHPVaul
     ///      exactly `burnedBalance` there), enabling redemptions out of the
     ///      locked burn tokens.
     error DegenerateVaultState();
-
-    // ──────────────────────────────────────────────────────────────────────────
-    // Modifiers
-    // ──────────────────────────────────────────────────────────────────────────
-
-    modifier onlyFactory() {
-        if (msg.sender != factory) revert OnlyFactory();
-        _;
-    }
 
     // ──────────────────────────────────────────────────────────────────────────
     // Constructor (implementation-only, no functional state)
@@ -293,11 +283,15 @@ contract DHPImplementation is ERC20, ReentrancyGuardTransient, Ownable, IDHPVaul
         // the burn accumulator from ever outrunning unencumbered backing —
         // previously a sustained death spiral (mass exits, nobody claiming)
         // could freeze the vault here (loud revert, but a freeze all the same).
+        // (#29) Stuck partner revenue is likewise a named-recipient
+        // liability: excluded from backing so it cannot inflate share
+        // pricing, and its settlement (claimStuck) moves neither price nor
+        // backing — bal and the liability leave together, 1:1.
         require(
-            bal >= burnedBalance + totalUnclaimed,
+            bal >= burnedBalance + totalUnclaimed + totalStuckRevenue,
             "DHP: token balance below burn + unclaimed liabilities"
         );
-        return bal - burnedBalance - totalUnclaimed;
+        return bal - burnedBalance - totalUnclaimed - totalStuckRevenue;
     }
 
     /// @dev Per-vault minimum first-deposit size (in raw token units). Set in
@@ -709,9 +703,9 @@ contract DHPImplementation is ERC20, ReentrancyGuardTransient, Ownable, IDHPVaul
 
         // Partner shares (2% each). Blacklist-proof pattern (v1.2.2 audit
         // M-EXT-1): raw call, never reverts the user's tx, never donates —
-        // a failing recipient's share is booked to `stuckRevenue` for the
-        // factory owner to sweep (follows factory ownership; renouncing
-        // the factory locks stuck funds — keep the factory owned).
+        // a failing recipient's share is booked to `stuckRevenue` — claimable
+        // by the entitled partner permissionlessly via `claimStuck()`; no
+        // admin path exists (factory renounce does NOT strand these funds).
         _payPartner(0, vaultCreator, creatorPortion);
         _payPartner(1, creationPlatform, creationPlatformPortion);
         if (usagePlatform_ == address(0)) {
@@ -746,24 +740,38 @@ contract DHPImplementation is ERC20, ReentrancyGuardTransient, Ownable, IDHPVaul
             emit PartnerFeeRouted(role, partner, amount);
         } else {
             stuckRevenue[partner] += amount;
+            totalStuckRevenue += amount;
             emit PartnerFeeRouted(role, address(0), amount); // partner=0x0 → stuck
         }
     }
 
     /// @notice #29: tokens booked as stuck when a partner transfer failed
-    ///         (blacklist, reverting receiver, gas-limited hook). Redeemable
-    ///         by the factory owner via `sweepStuck` to any destination.
+    ///         (blacklist, reverting receiver, gas-limited hook). These are
+    ///         LIABILITIES owed to a specific recipient — excluded from
+    ///         `totalAssets()` so they never back anyone's shares — and
+    ///         payable to the entitled partner ONLY via the permissionless
+    ///         `claimStuck()`. There is deliberately no owner/admin sweep:
+    ///         nobody can redirect a partner's earned revenue.
     mapping(address partner => uint256 amount) public stuckRevenue;
 
-    /// @notice #29: sweep a partner's stuck revenue share to `to`. Callable
-    ///         only by the factory contract itself — use the factory's
-    ///         `sweepVaultStuck(vault, partner, to)` (owner-gated).
-    function sweepStuck(address partner, address to) external {
-        if (msg.sender != factory) revert OnlyFactory();
+    /// @notice #29: sum of all booked stuck revenue. mirrors
+    ///         Σ `stuckRevenue` so `totalAssets()` can exclude liabilities
+    ///         in O(1) without iterating the partner mapping.
+    uint256 public totalStuckRevenue;
+
+    /// @notice #29: permissionless rescue — pays `partner`'s stuck revenue
+    ///         to the partner themselves. Anyone may trigger settlement
+    ///         (early settlement is harmless; the destination is hardwired
+    ///         and cannot be redirected). Reverts with the underlying
+    ///         token's error while the partner is still blacklisted or
+    ///         refusing — retry once they can receive.
+    function claimStuck(address partner) external {
         uint256 amount = stuckRevenue[partner];
         if (amount == 0) revert ZeroAmount();
         stuckRevenue[partner] = 0;
-        _assetToken.safeTransfer(to, amount);
+        totalStuckRevenue -= amount;
+        _assetToken.safeTransfer(partner, amount);
+        emit StuckRevenueClaimed(partner, amount);
     }
 
     /// @inheritdoc IDHPVault

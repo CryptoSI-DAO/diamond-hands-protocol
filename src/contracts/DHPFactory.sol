@@ -399,16 +399,6 @@ contract DHPFactory is Ownable2Step, ReentrancyGuardTransient {
         return allVaults.length;
     }
 
-    /// @notice #29: rescue a partner's stuck tax share from a vault (see
-    ///         `DHPImplementation.stuckRevenue`). Owner-gated and
-    ///         registry-checked: `vault` must be a factory-deployed vault.
-    ///         Use cases: creator lost their key, partner got blacklisted,
-    ///         a malicious token hook ate the payout.
-    function sweepVaultStuck(address vault, address partner, address to) external onlyOwner {
-        if (getToken[vault] == address(0)) revert InvalidToken();
-        DHPImplementation(payable(vault)).sweepStuck(partner, to);
-    }
-
     /// @notice Returns the vault address at index `i` in the registry.
     function allVaultsAt(uint256 i) external view returns (address) {
         return allVaults[i];

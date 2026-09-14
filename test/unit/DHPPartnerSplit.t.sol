@@ -168,8 +168,9 @@ contract DHPPartnerSplitTest is Test {
 
     /// @notice A blacklisted creator must NOT DoS deposits and must NOT
     ///         forfeit funds: deposit succeeds, share is booked to
-    ///         stuckRevenue, factory owner can sweep it out.
-    function test_blacklisted_creator_no_dos_and_stuck_is_sweepable() public {
+    ///         stuckRevenue, and ANYONE can later settle it to the creator
+    ///         via the permissionless claimStuck — no admin path exists.
+    function test_blacklisted_creator_no_dos_and_claimable_permissionlessly() public {
         BlacklistableToken blk = new BlacklistableToken();
         blk.setBlacklisted(creator, true);
 
@@ -187,28 +188,48 @@ contract DHPPartnerSplitTest is Test {
 
         // Creator's 2% = 2% of the 10% entry tax on 10_000e18 = 10e18 raw.
         assertEq(blkVault.stuckRevenue(creator), 10e18, "creator share booked stuck");
+        assertEq(blkVault.totalStuckRevenue(), 10e18, "global stuck ledger tracks it");
         // DAO share arrived regardless.
         assertGt(blk.balanceOf(address(feeCollector)), daoBefore, "DAO share unaffected");
 
-        // Rescue: only the factory owner, only for a registry-listed vault.
-        address rescue = makeAddr("rescue");
-        vm.prank(alice);
-        vm.expectRevert(
-            abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, alice)
+        // Stuck funds are a LIABILITY, not backing: excluded from pricing.
+        uint256 bal = blk.balanceOf(address(blkVault));
+        assertEq(
+            blkVault.totalAssets(),
+            bal - blkVault.burnedBalance() - blkVault.totalUnclaimed() - blkVault.totalStuckRevenue(),
+            "stuck excluded from totalAssets"
         );
-        factory.sweepVaultStuck(address(blkVault), creator, rescue);
 
-        vm.prank(address(this)); // test contract IS the factory owner
-        factory.sweepVaultStuck(address(blkVault), creator, rescue);
-        assertEq(blk.balanceOf(rescue), 10e18, "stuck share rescued");
+        // While blacklisted, settlement reverts (token-level) — but ANYONE
+        // may retry, and there is no owner override to abuse.
+        vm.prank(alice);
+        vm.expectRevert();
+        blkVault.claimStuck(creator);
+
+        // Creator recovers; claim triggers by a random third party.
+        blk.setBlacklisted(creator, false);
+        uint256 priceBefore = (blkVault.totalAssets() * 1e18) / blkVault.totalSupply();
+        vm.prank(makeAddr("bystander"));
+        blkVault.claimStuck(creator);
+        assertEq(blk.balanceOf(creator), 10e18, "creator paid by permissionless claim");
         assertEq(blkVault.stuckRevenue(creator), 0, "ledger cleared");
+        assertEq(blkVault.totalStuckRevenue(), 0, "global ledger cleared");
+
+        // Price-neutral: bal and the liability left together, 1:1.
+        assertEq(
+            blkVault.totalAssets(),
+            blk.balanceOf(address(blkVault)) - blkVault.burnedBalance() - blkVault.totalUnclaimed(),
+            "backing unchanged by settlement"
+        );
+        uint256 priceAfter = (blkVault.totalAssets() * 1e18) / blkVault.totalSupply();
+        assertEq(priceAfter, priceBefore, "share price unmoved by claimStuck");
     }
 
-    /// @notice sweepVaultStuck refuses non-vault addresses.
-    function test_sweep_rejects_non_vault() public {
-        vm.prank(address(this));
-        vm.expectRevert(DHPFactory.InvalidToken.selector);
-        factory.sweepVaultStuck(makeAddr("not-a-vault"), creator, alice);
+    /// @notice claimStuck with nothing stuck reverts loudly.
+    function test_claim_stuck_zero_reverts() public {
+        vm.prank(alice);
+        vm.expectRevert(DHPImplementation.ZeroAmount.selector);
+        v.claimStuck(alice);
     }
 
     /// @notice Partner wallets are stored, readable, and immutable
