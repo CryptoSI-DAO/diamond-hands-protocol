@@ -167,9 +167,9 @@ contract DHPCrddTierTest is Test {
         vm.expectRevert(DHPFactory.InsufficientCreationFee.selector);
         factory.createVault{value: 0}(address(tokenA), _canon());
 
-        address v = _createAs(pleb, 0.001 ether, address(tokenA));
+        address v = _createAs(pleb, 0.004 ether, address(tokenA));
         assertTrue(v != address(0));
-        assertEq(address(feeCollector).balance, 0.001 ether);
+        assertEq(address(feeCollector).balance, 0.004 ether);
     }
 
     // ── Boundary ─────────────────────────────────────────────────────────
