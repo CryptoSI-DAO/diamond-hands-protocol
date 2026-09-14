@@ -12,10 +12,11 @@ import {DHPImplementation} from "./DHPImplementation.sol";
 import {IDHPVault} from "../interfaces/IDHPVault.sol";
 
 /// @title  DHPFactory
-/// @notice Permissionless deployment of Diamond Hands Vaults. One vault per
-///         ERC-20 on Base (or whichever chain this factory is deployed to) —
-///         except for the curator (#27), who may create ONE override vault
-///         per token even after a vault exists (anti-squat escape hatch).
+/// @notice Permissionless deployment of Diamond Hands Vaults. Vault creation
+///         is FREE-MARKET: any wallet may create vaults for any token,
+///         including multiple vaults for the same token (#27 revision).
+///         The curator is the single exception — capped at ONE vault per
+///         token, keeping the curated layer squat-proof.
 /// @dev    Each `createVault()` call:
 ///           1. Validates the underlying token against the eligibility gate.
 ///           2. Clones the canonical `DHPImplementation` via EIP-1167.
@@ -25,7 +26,8 @@ import {IDHPVault} from "../interfaces/IDHPVault.sol";
 ///         Eligibility gate (configured at deploy time):
 ///           • Token must expose `decimals()` returning 0–18
 ///           • Caller must pass a valid `TaxConfig` (see bounds below)
-///           • A vault for this token must not already exist
+///           • Curator only: max one vault per token — there are no other
+///             per-token creation limits (#27 free-market policy)
 ///
 ///         Off-chain checks (BEFORE the on-chain tx) — done by the frontend
 ///         or factory helper script — should verify:
@@ -87,22 +89,24 @@ contract DHPFactory is Ownable2Step, ReentrancyGuardTransient {
     // ──────────────────────────────────────────────────────────────────────────
 
     /// @dev Mapping: underlying token → its vault address (zero if none).
-    ///      ALWAYS the FIRST vault created for the token — a curator override
-    ///      vault (#27) registers in `getCuratedVault` instead, never here.
+    ///      The FIRST vault created for the token — duplicates (allowed for
+    ///      anyone since #27) never overwrite it; the curator's vault
+    ///      registers in `getCuratedVault` when it is not the first.
     mapping(address token => address vault) public getVault;
 
-    /// @dev Mapping: underlying token → the curator's override vault (#27).
-    ///      Populated only when the curator uses the one-per-token exemption.
+    /// @dev Mapping: underlying token → the curator's vault (#27) when it is
+    ///      NOT the token's first vault. Zero when the curator created the
+    ///      canonical one or has not created for the token.
     mapping(address token => address vault) public getCuratedVault;
 
-    /// @dev Mapping: token → curator exemption consumed flag (#27). Set on the
-    ///      curator's FIRST create for the token via ANY path, enforcing
-    ///      "max one curator vault per token, ever".
+    /// @dev Mapping: token → curator cap consumed flag (#27). Set on the
+    ///      curator's FIRST create for the token via ANY path — the cap
+    ///      binds the curator's address, not the create path.
     mapping(address token => bool created) public curatorVaultCreated;
 
-    /// @notice The curator address (#27): exempt from one-vault-per-token,
-    ///         limited to ONE vault per token. Owner-settable (D1); renouncing
-    ///         factory ownership freezes it at its last value.
+    /// @notice The curator address (#27): the ONLY wallet capped at one vault
+    ///         per token. Owner-settable (D1); renouncing factory ownership
+    ///         freezes it at its last value.
     address public curator;
 
     /// @dev Mapping: underlying token → DAO curation flag (frontend-side only).
@@ -150,14 +154,14 @@ contract DHPFactory is Ownable2Step, ReentrancyGuardTransient {
     // ──────────────────────────────────────────────────────────────────────────
 
     error TokenAlreadyHasVault(address existing);
-    error VaultAlreadyExistsForToken(address token);
     error InvalidTaxConfig();
     error InvalidToken();
     error InvalidCurator();
     error InvalidDecimals(uint8 returned);
     error InsufficientCreationFee();
     error FeeTransferFailed();
-    /// @notice #27: the curator already created their one allowed vault for this token.
+    /// @notice #27: the curator already created their one allowed vault for
+    ///         this token (the only per-token creation limit on the factory).
     error CuratorVaultAlreadyExists(address token);
 
     // ──────────────────────────────────────────────────────────────────────────
@@ -224,17 +228,15 @@ contract DHPFactory is Ownable2Step, ReentrancyGuardTransient {
 
         if (token == address(0)) revert InvalidToken();
 
-        // ── #27 curator exemption ────────────────────────────────────────────
-        // The curator may create a vault for a token that already has one
-        // (anti-squat escape hatch), but at most ONE curator vault per token,
-        // enforced by consuming the flag on the curator's FIRST create via
-        // ANY path. Everyone else keeps the strict one-per-token rule.
+        // ── #27 free-market policy ───────────────────────────────────────────
+        // ANY wallet may create vaults for any token, including duplicates of
+        // an existing token vault. The curator is the ONLY capped wallet:
+        // ONE vault per token, enforced by consuming the flag on their FIRST
+        // create via ANY path (the cap binds the address, not the path).
         bool isCurator = msg.sender == curator;
         if (isCurator) {
             if (curatorVaultCreated[token]) revert CuratorVaultAlreadyExists(token);
             curatorVaultCreated[token] = true;
-        } else if (getVault[token] != address(0)) {
-            revert VaultAlreadyExistsForToken(token);
         }
 
         // Validate tax config against immutable bounds.
@@ -282,13 +284,13 @@ contract DHPFactory is Ownable2Step, ReentrancyGuardTransient {
             acceptFeesFromTransfer
         );
 
-        // Register. A curator OVERRIDE create (#27 — a vault already existed)
-        // registers in `getCuratedVault` and never overwrites `getVault`;
-        // every other path (curator included) owns the canonical mapping.
-        if (isCurator && getVault[token] != address(0)) {
-            getCuratedVault[token] = vault;
-        } else {
+        // Register. The FIRST vault for a token is canonical (`getVault`) and
+        // is never overwritten — not by duplicates, not by the curator. The
+        // curator's vault lands in `getCuratedVault` when it is not the first.
+        if (getVault[token] == address(0)) {
             getVault[token] = vault;
+        } else if (isCurator) {
+            getCuratedVault[token] = vault;
         }
         getToken[vault] = token;
         allVaults.push(vault);

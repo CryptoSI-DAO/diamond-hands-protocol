@@ -146,9 +146,17 @@ contract DHPFactoryTest is Test {
     // Eligibility gate
     // ──────────────────────────────────────────────────────────────────────────
 
-    function test_duplicate_vault_for_token_reverts() public {
-        _createVaultWithFee(address(tokenA), _validCfg());
-        _expectRevertWithFee(address(tokenA), _validCfg(), abi.encodeWithSelector(DHPFactory.VaultAlreadyExistsForToken.selector, address(tokenA)));
+    function test_duplicate_vault_for_token_allowed() public {
+        // #27 free-market policy: duplicates are allowed for ANY wallet.
+        address first = _createVaultWithFee(address(tokenA), _validCfg());
+        address second = _createVaultWithFee(address(tokenA), _validCfg());
+
+        // Distinct vaults, canonical mapping stays on the FIRST, both indexed.
+        assertTrue(first != second);
+        assertEq(factory.getVault(address(tokenA)), first);
+        assertEq(factory.vaultCount(), 2);
+        assertEq(factory.allVaultsAt(0), first);
+        assertEq(factory.allVaultsAt(1), second);
     }
 
     function test_zero_token_reverts() public {

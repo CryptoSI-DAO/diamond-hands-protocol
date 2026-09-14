@@ -11,11 +11,12 @@ import {DHPFeeCollector} from "../../src/contracts/DHPFeeCollector.sol";
 
 import {MockERC20} from "../mocks/MockERC20.sol";
 
-/// @title  Curator exemption tests (#27)
-/// @notice The curator may create ONE vault per token even when a vault
-///         already exists (anti-squat escape hatch). Everyone else keeps the
-///         strict one-vault-per-token rule. The override vault registers in
-///         `getCuratedVault` and NEVER overwrites the canonical `getVault`.
+/// @title  Curator cap tests (#27)
+/// @notice Vault creation is FREE-MARKET: any wallet may create vaults for
+///         any token, including duplicates. The curator is the ONLY wallet
+///         capped at ONE vault per token (flag consumed on their first
+///         create, any path). The canonical `getVault[token]` is always the
+///         token's FIRST vault and is never overwritten.
 contract DHPCuratorExemptionTest is Test {
     DHPImplementation internal implementation;
     DHPFactory internal factory;
@@ -127,7 +128,8 @@ contract DHPCuratorExemptionTest is Test {
             );
         }
 
-        // D4: curator already owns the ONLY vault — still blocked from a second.
+        // D4: cap binds ANY path — the curator cannot create a second vault
+        // for this token even though duplicates are free for everyone else.
         uint256 fee = factory.VAULT_CREATION_FEE();
         vm.prank(curator);
         vm.expectRevert(
@@ -136,31 +138,28 @@ contract DHPCuratorExemptionTest is Test {
         factory.createVault{value: fee}(address(tokenA), _canon());
     }
 
-    function test_NonCurator_StillBlockedByOnePerToken() public {
-        _createAs(squatter, address(tokenA));
+    function test_NonCurator_DuplicateAllowed_SameActor() public {
+        // Free market: the same wallet duplicates a token's vault freely.
+        address first = _createAs(squatter, address(tokenA));
+        address second = _createAs(squatter, address(tokenA));
 
-        address other = makeAddr("other");
-        vm.deal(other, 1 ether);
-        uint256 fee = factory.VAULT_CREATION_FEE();
-        vm.prank(other);
-        vm.expectRevert(
-            abi.encodeWithSelector(DHPFactory.VaultAlreadyExistsForToken.selector, address(tokenA))
-        );
-        factory.createVault{value: fee}(address(tokenA), _canon());
+        assertTrue(first != second);
+        assertEq(factory.getVault(address(tokenA)), first);
+        assertEq(factory.vaultCount(), 2);
+        assertTrue(factory.curatorVaultCreated(address(tokenA)) == false);
     }
 
-    function test_NonCurator_Blocked_EvenAfterCuratorCanonicalCreate() public {
-        // Curator takes the canonical slot; squatter gets the NORMAL
-        // one-per-token error (the curator flag must not gate other actors).
-        _createAs(curator, address(tokenA));
-        assertTrue(factory.getVault(address(tokenA)) != address(0));
+    function test_NonCurator_Duplicate_AfterCuratorCanonicalCreate() public {
+        // Curator takes the canonical slot; anyone can still duplicate.
+        address curatorVault = _createAs(curator, address(tokenA));
 
-        uint256 fee = factory.VAULT_CREATION_FEE();
-        vm.prank(squatter);
-        vm.expectRevert(
-            abi.encodeWithSelector(DHPFactory.VaultAlreadyExistsForToken.selector, address(tokenA))
-        );
-        factory.createVault{value: fee}(address(tokenA), _canon());
+        address dup = _createAs(squatter, address(tokenA));
+        assertTrue(dup != address(0));
+
+        // Canonical stays the curator's first create; curated mapping zero.
+        assertEq(factory.getVault(address(tokenA)), curatorVault);
+        assertEq(factory.getCuratedVault(address(tokenA)), address(0));
+        assertEq(factory.vaultCount(), 2);
     }
 
     function test_SetCurator_ReassignAndGuards() public {
@@ -209,11 +208,15 @@ contract DHPCuratorExemptionTest is Test {
         new DHPFactory(address(implementation), address(feeCollector), address(0), 0, 18);
     }
 
-    /// @notice Random walk over the (actor x token) state machine: the curator
-    ///         must NEVER end up with more than one vault per token.
+    /// @notice Random walk over the (actor x token) state machine under the
+    ///         free-market policy: the curator must NEVER end up with more
+    ///         than one vault per token, and the canonical `getVault` for a
+    ///         token must be set exactly once (first create) and never move.
     function testFuzz_AtMostOneCuratorVaultPerToken(uint256 seed) public {
         uint256 curatorVaultsA;
         uint256 curatorVaultsB;
+        address canonicalA;
+        address canonicalB;
 
         for (uint256 i = 0; i < 8; i++) {
             uint256 r = uint256(keccak256(abi.encode(seed, i)));
@@ -221,12 +224,25 @@ contract DHPCuratorExemptionTest is Test {
             MockERC20 tok = r % 4 < 2 ? tokenA : tokenB;
             bool onA = address(tok) == address(tokenA);
 
-            // Skip states that would revert (they are unit-tested above).
+            // Only the curator can hit a revert; skip consumed states.
             if (asCurator && factory.curatorVaultCreated(address(tok))) continue;
-            if (!asCurator && factory.getVault(address(tok)) != address(0)) continue;
 
             address actor = asCurator ? curator : squatter;
+
+            // Canonical set-once invariant: capture the zero-state before the
+            // create, then assert the mapping never moves afterwards.
+            address before = factory.getVault(address(tok));
             _createAs(actor, address(tok));
+            address afterV = factory.getVault(address(tok));
+            if (before == address(0)) {
+                if (onA) {
+                    canonicalA = afterV;
+                } else {
+                    canonicalB = afterV;
+                }
+            } else {
+                assertEq(afterV, before, "canonical mapping moved");
+            }
 
             if (asCurator) {
                 if (onA) {
@@ -240,5 +256,7 @@ contract DHPCuratorExemptionTest is Test {
 
         assertLe(curatorVaultsA, 1, "curator created multiple vaults for tokenA");
         assertLe(curatorVaultsB, 1, "curator created multiple vaults for tokenB");
+        // Canonical mapping is always set (something created each token).
+        assertTrue(canonicalA != address(0) || canonicalB != address(0));
     }
 }
