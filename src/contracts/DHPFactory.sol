@@ -18,16 +18,18 @@ import {IDHPVault} from "../interfaces/IDHPVault.sol";
 ///         The curator is the single exception — capped at ONE vault per
 ///         token, keeping the curated layer squat-proof.
 /// @dev    Each `createVault()` call:
-///           1. Validates the underlying token against the eligibility gate.
+///           1. Validates the underlying token's `decimals()` (0–18 gate).
 ///           2. Clones the canonical `DHPImplementation` via EIP-1167.
-///           3. Calls `initialize()` on the clone with the chosen tax config.
+///           3. Calls `initialize()` on the clone with the FIXED #29 canon.
 ///           4. Records the (token → vault) mapping for frontend indexing.
 ///
 ///         Eligibility gate (configured at deploy time):
 ///           • Token must expose `decimals()` returning 0–18
-///           • Caller must pass a valid `TaxConfig` (see bounds below)
+///           • Caller must pass the two #29 partner wallets (non-zero)
 ///           • Curator only: max one vault per token — there are no other
 ///             per-token creation limits (#27 free-market policy)
+///           • Payment (v1.4, #28): exact 0.004 ETH — waived (0 ETH) for
+///             CRDD tier members while the tier is wired
 ///
 ///         Off-chain checks (BEFORE the on-chain tx) — done by the frontend
 ///         or factory helper script — should verify:
@@ -36,11 +38,11 @@ import {IDHPVault} from "../interfaces/IDHPVault.sol";
 ///           • Minimum holder count
 ///           • Source verified on Basescan
 ///
-///         Tax config bounds (immutable after factory deploy):
-///           • entryTaxBps     ∈ [0, MAX_ENTRY_TAX_BPS=1000]   (0–10%)
-///           • exitTaxBps      ∈ [0, MAX_EXIT_TAX_BPS=2500]    (0–25%)
-///           • dividendShareBps ∈ [0, MAX_DIVIDEND_SHARE_BPS=9000] (0–90%)
-///           • dividendShareBps + 50 (protocol fee) ≤ 10000
+///         Tax canon (v1.4, #29 — FIXED, not configurable):
+///           • entryTaxBps = 500 · exitTaxBps = 1000 · dividendShare 8000
+///           • strict FOT mode (acceptFeesFromTransfer = false)
+///           • Every tax splits 80/10/4/2/2/2 (dividends/burn/DAO/creator/
+///             creation-platform/usage-platform) inside the vault
 ///
 ///         The factory itself is `Ownable2Step`. Owner-gated functions:
 ///         `setVerified(token, bool)` for frontend curation and
@@ -64,9 +66,6 @@ contract DHPFactory is Ownable2Step, ReentrancyGuardTransient {
     // ──────────────────────────────────────────────────────────────────────────
 
     uint16 public constant MAX_ENTRY_TAX_BPS = 1_000;   // 10%
-    uint16 public constant MAX_EXIT_TAX_BPS = 2_500;    // 25%
-    uint16 public constant MAX_DIVIDEND_SHARE_BPS = 9_000; // 90%
-    uint16 public constant PROTOCOL_FEE_BPS = 50;      // 0.5%
 
     /// @dev Creation fee to prevent griefing the registry. ~$12-16 at current
     ///      ETH prices — high enough to make mass-griefing expensive (250
@@ -110,6 +109,20 @@ contract DHPFactory is Ownable2Step, ReentrancyGuardTransient {
     ///         freezes it at its last value.
     address public curator;
 
+    // ──────────────────────────────────────────────────────────────────────────
+    // CRDD minting tier (#28)
+    // ──────────────────────────────────────────────────────────────────────────
+
+    /// @notice CRDD token gating the free-minting tier. ZERO = tier disabled
+    ///         (deploy default; everyone pays the per-vault fee). Owner-wired
+    ///         once CRDD's address is final; renouncing freezes it.
+    address public crddToken;
+
+    /// @notice Balance of `crddToken` (in its own decimals) that unlocks
+    ///         unlimited fee-free vault creation. Set together with
+    ///         `crddToken`; immutable between owner calls.
+    uint256 public crddTierThreshold;
+
     /// @dev Mapping: underlying token → DAO curation flag (frontend-side only).
     mapping(address token => bool verified) public isVerified;
 
@@ -123,14 +136,20 @@ contract DHPFactory is Ownable2Step, ReentrancyGuardTransient {
     // Structs
     // ──────────────────────────────────────────────────────────────────────────
 
-    struct TaxConfig {
-        uint16 entryTaxBps;
-        uint16 exitTaxBps;
-        uint16 dividendShareBps;
-        /// @dev v1.2.1: If true, the vault accepts tokens with FOT/hook behaviour
-        ///      (rebasing, gas-burn, marketing-fee). Default: false.
-        bool acceptFeesFromTransfer;
-    }
+    // ── #29: FIXED tax canon (Carl: creators cannot configure taxes) ─────
+    //    Every vault ships 5% entry / 10% exit / 80% dividend share — same
+    //    canon the frontend already displays as fixed. Split weights live
+    //    in the vault (#29 constants).
+    uint16 public constant FIXED_ENTRY_TAX_BPS = 500;        // 5%
+    uint16 public constant FIXED_EXIT_TAX_BPS = 1_000;       // 10%
+    uint16 public constant FIXED_DIVIDEND_SHARE_BPS = 8_000; // 80% of tax
+    bool public constant FIXED_ACCEPT_FOT = false;           // strict FOT mode
+
+    /// @notice #29: the two partner wallets the creating frontend chose.
+    ///         NOT part of the user's create message — they are forwarded
+    ///         into the clone's `initialize` and emitted in `VaultCreated`.
+    ///         (v1.4.0, audit I-NEW-1) These are pure parameters — no state
+    ///         is kept (the previous write-only storage vars are gone).
 
     // ──────────────────────────────────────────────────────────────────────────
     // Events
@@ -139,9 +158,8 @@ contract DHPFactory is Ownable2Step, ReentrancyGuardTransient {
     event VaultCreated(
         address indexed token,
         address indexed vault,
-        uint16 entryTaxBps,
-        uint16 exitTaxBps,
-        uint16 dividendShareBps
+        address indexed creatorWallet,
+        address creationPlatformWallet
     );
     event VerifiedSet(address indexed token, bool verified);
 
@@ -150,12 +168,17 @@ contract DHPFactory is Ownable2Step, ReentrancyGuardTransient {
     event CuratedVaultCreated(address indexed token, address indexed vault);
     event CuratorSet(address indexed previousCurator, address indexed newCurator);
 
+    /// @notice #28: tier config wired or disabled (token=0, threshold=0).
+    event CrddTierConfigured(address indexed token, uint256 threshold);
+
+    /// @notice #28: a tier member minted a vault fee-free.
+    event TierVaultCreated(address indexed creator, address indexed token, address indexed vault);
+
     // ──────────────────────────────────────────────────────────────────────────
     // Errors
     // ──────────────────────────────────────────────────────────────────────────
 
-    error TokenAlreadyHasVault(address existing);
-    error InvalidTaxConfig();
+    error InvalidPartnerWallet();
     error InvalidToken();
     error InvalidCurator();
     error InvalidDecimals(uint8 returned);
@@ -164,6 +187,10 @@ contract DHPFactory is Ownable2Step, ReentrancyGuardTransient {
     /// @notice #27: the curator already created their one allowed vault for
     ///         this token (the only per-token creation limit on the factory).
     error CuratorVaultAlreadyExists(address token);
+    /// @notice #28: tier members must send 0 ETH; non-tier send exactly the fee.
+    error UnexpectedMsgValue();
+    /// @notice #28: setCrddToken called with a token but zero threshold.
+    error InvalidCrddConfig();
 
     // ──────────────────────────────────────────────────────────────────────────
     // Constructor
@@ -202,26 +229,41 @@ contract DHPFactory is Ownable2Step, ReentrancyGuardTransient {
     // ──────────────────────────────────────────────────────────────────────────
 
     /// @notice Deploy a new Diamond Hands Vault for `token`.
-    /// @param  token   The underlying ERC-20 the vault will wrap.
-    /// @param  cfg     Tax configuration.
-    /// @return vault   The address of the newly created clone.
-    /// @dev    Requires `msg.value >= VAULT_CREATION_FEE` (0.004 ETH) —
-    ///         EXACTLY, no refund path (v1.2 griefing fix: reverting-receive
-    ///         callers could trap refunds). The fee goes to the DAO treasury
-    ///         (feeCollector) to prevent registry griefing.
-    function createVault(address token, TaxConfig calldata cfg)
+    /// @param  token             The underlying ERC-20 the vault will wrap.
+    /// @param  creatorWallet_    #29: wallet earning 2% of every in/out tax.
+    ///                           Set once, immutable, non-zero.
+    /// @param  creationPlatformWallet_ #29: platform earning 2% of every tax.
+    ///                           May equal `creatorWallet_`. Non-zero.
+    /// @return vault             The address of the newly created clone.
+    /// @dev    Taxes are FIXED (#29, Carl): every vault ships 5% entry /
+    ///         10% exit / 80% dividend share / strict FOT mode — there is
+    ///         no TaxConfig to pass. Payment (v1.4 #28): CRDD tier members
+    ///         send exactly 0 ETH; everyone else exactly 0.004 ETH. No
+    ///         refunds. Tier disabled while `crddToken` is zero.
+    function createVault(address token, address creatorWallet_, address creationPlatformWallet_)
         external
         payable
         nonReentrant
         returns (address vault)
     {
-        // Anti-grief: require EXACTLY the creation fee (no refund). Refunding
-        // excess was removed in v1.2 because contracts with a reverting
-        // receive() function could grief by sending excess and trapping the
-        // refund inside the factory forever. Requiring the exact fee also
-        // avoids the silent-fee-loss risk if the refund call reverts for any
-        // reason (out-of-gas in caller, etc.). Excess ETH is no longer accepted.
-        if (msg.value != VAULT_CREATION_FEE) {
+        // ── #29 partner wallets — validated, then encoded into the vault's
+        // immutable config via initialize + the VaultCreated event. Not part
+        // of the user's create message, and not stored in factory state
+        // (audit I-NEW-1: the old write-only vars are removed).
+        if (creatorWallet_ == address(0) || creationPlatformWallet_ == address(0)) {
+            revert InvalidPartnerWallet();
+        }
+        // ── #28 CRDD minting tier ────────────────────────────────────────────
+        // Holders of `crddTierThreshold` CRDD (in the token's own decimals)
+        // mint fee-free and must send exactly 0 ETH. Everyone else pays
+        // exactly VAULT_CREATION_FEE. No refunds in either case — the v1.2
+        // griefing rationale (reverting-receive callers trapping refunds)
+        // applies to both paths.
+        bool tierMember = crddToken != address(0) &&
+            IERC20(crddToken).balanceOf(msg.sender) >= crddTierThreshold;
+        if (tierMember) {
+            if (msg.value != 0) revert UnexpectedMsgValue();
+        } else if (msg.value != VAULT_CREATION_FEE) {
             revert InsufficientCreationFee();
         }
 
@@ -238,11 +280,8 @@ contract DHPFactory is Ownable2Step, ReentrancyGuardTransient {
             curatorVaultCreated[token] = true;
         }
 
-        // Validate tax config against immutable bounds.
-        if (cfg.entryTaxBps > MAX_ENTRY_TAX_BPS) revert InvalidTaxConfig();
-        if (cfg.exitTaxBps > MAX_EXIT_TAX_BPS) revert InvalidTaxConfig();
-        if (cfg.dividendShareBps > MAX_DIVIDEND_SHARE_BPS) revert InvalidTaxConfig();
-        if (cfg.dividendShareBps + PROTOCOL_FEE_BPS > 10_000) revert InvalidTaxConfig();
+        // ── #29 FIXED tax canon — there is no user-supplied TaxConfig.
+        // Every vault ships 5% entry / 10% exit / 80% dividend share.
 
         // Validate the token's `decimals()` return. We require a sane answer
         // between minDecimals and maxDecimals (default [0, 18]). Tokens that
@@ -266,21 +305,21 @@ contract DHPFactory is Ownable2Step, ReentrancyGuardTransient {
         // configurations (1.0 SPX for 6-decimal tokens, 1.0 wstETH for
         // 18-decimal tokens). See audit finding M-NEW-2.
         //
-        // v1.2.1: `acceptFeesFromTransfer` is exposed as a per-vault flag
-        // (audit M-CARRIED-1: previously, tokens with legitimate hooks were
-        // rejected). Default: false (strict mode, rejects FOT tokens).
-        // Factory owner can set true for known-hook tokens.
+        // Taxes are the FIXED #29 canon (5/10/80, strict FOT mode) — there
+        // is no per-vault `acceptFeesFromTransfer` opt-in any more; the
+        // v1.2.1 owner-settable flag story is retired.
         uint256 minFirstDeposit = 10 ** IERC20Metadata(token).decimals();
-        bool acceptFeesFromTransfer = cfg.acceptFeesFromTransfer;
         vault = implementation.clone();
         DHPImplementation(payable(vault)).initialize(
             IERC20(token),
             feeCollector,
-            cfg.entryTaxBps,
-            cfg.exitTaxBps,
-            cfg.dividendShareBps,
+            creatorWallet_,
+            creationPlatformWallet_,
+            FIXED_ENTRY_TAX_BPS,
+            FIXED_EXIT_TAX_BPS,
+            FIXED_DIVIDEND_SHARE_BPS,
             minFirstDeposit,
-            acceptFeesFromTransfer
+            FIXED_ACCEPT_FOT
         );
 
         // Register. The FIRST vault for a token is canonical (`getVault`) and
@@ -294,13 +333,16 @@ contract DHPFactory is Ownable2Step, ReentrancyGuardTransient {
         getToken[vault] = token;
         allVaults.push(vault);
 
-        // Forward the creation fee to the DAO treasury.
-        if (VAULT_CREATION_FEE > 0) {
-            (bool ok, ) = payable(feeCollector).call{value: VAULT_CREATION_FEE}("");
+        // Forward the creation fee to the DAO treasury (#28: tier pays 0).
+        if (msg.value > 0) {
+            (bool ok, ) = payable(feeCollector).call{value: msg.value}("");
             if (!ok) revert FeeTransferFailed();
         }
 
-        emit VaultCreated(token, vault, cfg.entryTaxBps, cfg.exitTaxBps, cfg.dividendShareBps);
+        emit VaultCreated(token, vault, creatorWallet_, creationPlatformWallet_);
+        if (tierMember) {
+            emit TierVaultCreated(msg.sender, token, vault);
+        }
         if (isCurator && getCuratedVault[token] == vault) {
             emit CuratedVaultCreated(token, vault);
         }
@@ -330,6 +372,22 @@ contract DHPFactory is Ownable2Step, ReentrancyGuardTransient {
         curator = newCurator;
     }
 
+    /// @notice #28: wire or disable the CRDD minting tier. `token = 0`
+    ///         disables the tier (threshold must then be 0); a non-zero
+    ///         token requires a non-zero threshold. `threshold` is in the
+    ///         CRDD token's own decimals (e.g. 10_000e18 for an 18-decimal
+    ///         CRDD). Owner-gated; renouncing ownership freezes the config.
+    function setCrddToken(address token, uint256 threshold) external onlyOwner {
+        if (token == address(0)) {
+            if (threshold != 0) revert InvalidCrddConfig();
+        } else if (threshold == 0) {
+            revert InvalidCrddConfig();
+        }
+        crddToken = token;
+        crddTierThreshold = threshold;
+        emit CrddTierConfigured(token, threshold);
+    }
+
     // ──────────────────────────────────────────────────────────────────────────
     // View helpers
     // ──────────────────────────────────────────────────────────────────────────
@@ -342,5 +400,12 @@ contract DHPFactory is Ownable2Step, ReentrancyGuardTransient {
     /// @notice Returns the vault address at index `i` in the registry.
     function allVaultsAt(uint256 i) external view returns (address) {
         return allVaults[i];
+    }
+
+    /// @notice #28: whether `who` qualifies for fee-free vault creation
+    ///         right now (false while the tier is disabled).
+    function isTierMember(address who) external view returns (bool) {
+        return crddToken != address(0) &&
+            IERC20(crddToken).balanceOf(who) >= crddTierThreshold;
     }
 }

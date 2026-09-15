@@ -17,12 +17,21 @@ import {IDHPVault} from "../interfaces/IDHPVault.sol";
 ///         each user-facing vault is an EIP-1167 minimal proxy over this
 ///         contract, initialised with one specific underlying ERC-20.
 ///
-///         Per-vault economic model:
-///         - Entry tax `entryTaxBps` on deposit. Split into:
-///             • `dividendShareBps` of the tax → pro-rata dividend pool
-///             • 0.5% protocol fee → `feeCollector`
-///             • Remainder → `0x…dEaD` (burned forever)
-///         - Exit tax `exitTaxBps` on withdraw — same split.
+///         Per-vault economic model (v1.4.0, #29 fixed canon):
+///         - Taxes are FIXED: 5% entry / 10% exit — creators cannot
+///           configure them (the factory hardwires the canon).
+///         - Every tax splits six ways (#29 weights, fixed in code):
+///             • 80% → pro-rata dividend pool (dividendShareBps = 8_000)
+///             • 10% → burned (lock-in-vault, tracked in burnedBalance)
+///             •  4% → DAO, via `feeCollector`
+///             •  2% → vault creator (immutable, set at creation)
+///             •  2% → creation platform (immutable, set at creation)
+///             •  2% → usage platform (per-tx param; 0x0 → DAO fallback)
+///         - Exit tax `exitTaxBps` on withdraw — same six-way split.
+///         - Partner payouts that fail (blacklist/reverting receiver) are
+///           booked to `stuckRevenue` — a named-recipient liability,
+///           excluded from share pricing, claimable permissionlessly via
+///           `claimStuck()`. No admin path can redirect or sweep them.
 ///         - Dividends accrue via Synthetix StakingRewards math:
 ///             `rewardPerTokenStored` ticks up by
 ///               `(dividendAmount * 1e18) / totalSupply`
@@ -40,6 +49,10 @@ import {IDHPVault} from "../interfaces/IDHPVault.sol";
 ///         holds no shares and no settled rewards, so every re-entry path is
 ///         inert. This separation is what makes per-function `nonReentrant`
 ///         sufficient — do not "simplify" the two-token split away.
+///         (v1.4.0, audit H-NEW-1) Additionally, EVERY state-mutating entry
+///         point carries `nonReentrant` — including `claimStuck`, whose
+///         payout window was PoC-proven reentrable through a malicious
+///         partner wallet's transfer hook before the fix.
 ///
 ///         Share accounting follows the standard ERC-4626 formula, but the
 ///         deposit/withdraw entry-points apply tax first and then mint/burn
@@ -58,8 +71,22 @@ contract DHPImplementation is ERC20, ReentrancyGuardTransient, Ownable, IDHPVaul
     uint16 internal constant BPS = 10_000;
     uint16 internal constant MAX_ENTRY_TAX_BPS = 1_000;  // 10%
     uint16 internal constant MAX_EXIT_TAX_BPS = 2_500;   // 25%
-    uint16 internal constant PROTOCOL_FEE_BPS = 50;      // 0.5%
-    uint16 internal constant MAX_DIVIDEND_SHARE_BPS = 9_000; // 90%
+
+    // ── #29 partner-split weights (bps OF TAX). FIXED at launch (Carl) —
+    //    same ratio on entry and exit. Sum + DIVIDEND = 10_000 exactly. ──
+    uint16 internal constant WEIGHT_BURN_BPS = 1_000;            // 10% of tax → burned (lock-in-vault)
+    uint16 internal constant WEIGHT_DAO_BPS = 400;               //  4% of tax → feeCollector (DAO)
+    uint16 internal constant WEIGHT_CREATOR_BPS = 200;           //  2% of tax → vault creator
+    uint16 internal constant WEIGHT_CREATION_PLATFORM_BPS = 200; //  2% of tax → creation platform
+    uint16 internal constant WEIGHT_USAGE_PLATFORM_BPS = 200;    //  2% of tax → usage platform
+
+    /// @dev (v1.4.0, audit M-NEW-1) TRUE bound on the dividend share under the
+    ///      #29 fixed split: dividend + burn(1000) + DAO(400) + 3×200 partner
+    ///      weights ≤ 10_000 ⇒ dividend ≤ 8_000. The old `MAX_DIVIDEND_SHARE_BPS
+    ///      = 9_000` and the `dividendShare + PROTOCOL_FEE_BPS` check both
+    ///      predate the partner weights and admitted a config that would
+    ///      underflow `_distributeTax` (vault bricks on first deposit).
+    uint16 internal constant MAX_DIVIDEND_SHARE_BPS = 8_000; // 80% of tax
 
     /// @dev The burn mechanism is the "lock-in-vault" model (tracked in
     ///      `burnedBalance`, subtracted from `totalAssets()` for share-price
@@ -153,7 +180,6 @@ contract DHPImplementation is ERC20, ReentrancyGuardTransient, Ownable, IDHPVaul
     // Errors
     // ──────────────────────────────────────────────────────────────────────────
 
-    error OnlyFactory();
     error AlreadyInitialised();
     error InvalidBpsConfiguration();
     error FeeOnTransferToken();
@@ -168,15 +194,6 @@ contract DHPImplementation is ERC20, ReentrancyGuardTransient, Ownable, IDHPVaul
     ///      exactly `burnedBalance` there), enabling redemptions out of the
     ///      locked burn tokens.
     error DegenerateVaultState();
-
-    // ──────────────────────────────────────────────────────────────────────────
-    // Modifiers
-    // ──────────────────────────────────────────────────────────────────────────
-
-    modifier onlyFactory() {
-        if (msg.sender != factory) revert OnlyFactory();
-        _;
-    }
 
     // ──────────────────────────────────────────────────────────────────────────
     // Constructor (implementation-only, no functional state)
@@ -207,6 +224,8 @@ contract DHPImplementation is ERC20, ReentrancyGuardTransient, Ownable, IDHPVaul
     function initialize(
         IERC20 token_,
         address feeCollector_,
+        address vaultCreator_,
+        address creationPlatform_,
         uint16 entryTaxBps_,
         uint16 exitTaxBps_,
         uint16 dividendShareBps_,
@@ -215,13 +234,23 @@ contract DHPImplementation is ERC20, ReentrancyGuardTransient, Ownable, IDHPVaul
     ) external {
         if (_vaultInitialised) revert AlreadyInitialised();
         if (address(token_) == address(0) || feeCollector_ == address(0)) revert ZeroAddress();
+        if (vaultCreator_ == address(0) || creationPlatform_ == address(0)) revert ZeroAddress();
         if (entryTaxBps_ > MAX_ENTRY_TAX_BPS) revert InvalidBpsConfiguration();
         if (exitTaxBps_ > MAX_EXIT_TAX_BPS) revert InvalidBpsConfiguration();
-        if (dividendShareBps_ + PROTOCOL_FEE_BPS > BPS) revert InvalidBpsConfiguration();
+        // (v1.4.0, audit M-NEW-1) Validate the FULL #29 weight sum, not the
+        // pre-#29 "dividend + 0.5% fee" invariant. A legacy 9_000-dividend
+        // config would make `taxAmount - assigned` underflow in
+        // `_distributeTax`, bricking every deposit/withdraw on the clone.
+        if (dividendShareBps_ + WEIGHT_BURN_BPS + WEIGHT_DAO_BPS +
+            WEIGHT_CREATOR_BPS + WEIGHT_CREATION_PLATFORM_BPS + WEIGHT_USAGE_PLATFORM_BPS > BPS) {
+            revert InvalidBpsConfiguration();
+        }
 
         _vaultInitialised = true;
         factory = msg.sender;
         feeCollector = feeCollector_;
+        vaultCreator = vaultCreator_;
+        creationPlatform = creationPlatform_;
         entryTaxBps = entryTaxBps_;
         exitTaxBps = exitTaxBps_;
         dividendShareBps = dividendShareBps_;
@@ -280,11 +309,15 @@ contract DHPImplementation is ERC20, ReentrancyGuardTransient, Ownable, IDHPVaul
         // the burn accumulator from ever outrunning unencumbered backing —
         // previously a sustained death spiral (mass exits, nobody claiming)
         // could freeze the vault here (loud revert, but a freeze all the same).
+        // (#29) Stuck partner revenue is likewise a named-recipient
+        // liability: excluded from backing so it cannot inflate share
+        // pricing, and its settlement (claimStuck) moves neither price nor
+        // backing — bal and the liability leave together, 1:1.
         require(
-            bal >= burnedBalance + totalUnclaimed,
+            bal >= burnedBalance + totalUnclaimed + totalStuckRevenue,
             "DHP: token balance below burn + unclaimed liabilities"
         );
-        return bal - burnedBalance - totalUnclaimed;
+        return bal - burnedBalance - totalUnclaimed - totalStuckRevenue;
     }
 
     /// @dev Per-vault minimum first-deposit size (in raw token units). Set in
@@ -303,6 +336,21 @@ contract DHPImplementation is ERC20, ReentrancyGuardTransient, Ownable, IDHPVaul
     ///      tokens with legitimate hooks like rebasing or marketing-fee tokens.
     ///      Factory owners can now opt in to a permissive mode per vault.)
     bool public acceptFeesFromTransfer;
+
+    // ── #29 partner wallets (immutable after initialize) ─────────────────
+    // The 5% entry / 10% exit taxes are FIXED for every vault (Carl: no
+    // creator configuration). These two addresses are set once at vault
+    // creation by the creating frontend and receive their fixed share of
+    // every in/out tax forever.
+
+    /// @notice Wallet that created this vault (via the factory). Receives
+    ///         2% of every tax on entry and exit.
+    address public vaultCreator;
+
+    /// @notice Frontend/platform that hosted the vault's creation tx.
+    ///         Receives 2% of every tax on entry and exit. May equal
+    ///         `vaultCreator`.
+    address public creationPlatform;
 
     // ──────────────────────────────────────────────────────────────────────────
     // ERC-4626 share accounting (re-implemented; not inherited)
@@ -387,6 +435,18 @@ contract DHPImplementation is ERC20, ReentrancyGuardTransient, Ownable, IDHPVaul
     function deposit(uint256 assets, address receiver)
         public
         override
+        returns (uint256 shares)
+    {
+        // #29: plain ERC-4626 entry — no usage platform in calldata, so the
+        // usage-platform share routes to the DAO (headless calls must work).
+        // Guard lives on depositWithPlatform; this thin delegator must NOT
+        // be nonReentrant (nested guard entry would revert).
+        return depositWithPlatform(assets, receiver, address(0));
+    }
+
+    /// @notice #29: deposit with the usage-platform attribution param.
+    function depositWithPlatform(uint256 assets, address receiver, address usagePlatform_)
+        public
         nonReentrant
         returns (uint256 shares)
     {
@@ -431,7 +491,7 @@ contract DHPImplementation is ERC20, ReentrancyGuardTransient, Ownable, IDHPVaul
         // Dividend accounting: send fee+burn out first so totalAssets is correct,
         // then accrue the dividend index (using pre-mint supply), then mint
         // the shares computed above on the pre-deposit exchange rate.
-        _distributeTax(tax);
+        _distributeTax(tax, usagePlatform_);
         _accrueDividend(tax);
 
         _mint(receiver, shares);
@@ -443,6 +503,16 @@ contract DHPImplementation is ERC20, ReentrancyGuardTransient, Ownable, IDHPVaul
     function mint(uint256 shares, address receiver)
         public
         override
+        returns (uint256 assets)
+    {
+        // #29: plain entry — usage-platform share routes to the DAO.
+        // Guard lives on mintWithPlatform (see deposit note).
+        return mintWithPlatform(shares, receiver, address(0));
+    }
+
+    /// @notice #29: mint with the usage-platform attribution param.
+    function mintWithPlatform(uint256 shares, address receiver, address usagePlatform_)
+        public
         nonReentrant
         returns (uint256 assets)
     {
@@ -473,7 +543,7 @@ contract DHPImplementation is ERC20, ReentrancyGuardTransient, Ownable, IDHPVaul
         // Distributing tax first means the user pays the post-distribute
         // exchange rate (correct), instead of over-minting at the
         // pre-distribute rate (the old bug).
-        _distributeTax(tax);
+        _distributeTax(tax, usagePlatform_);
         _accrueDividend(tax);
         _mint(receiver, shares);
 
@@ -488,6 +558,16 @@ contract DHPImplementation is ERC20, ReentrancyGuardTransient, Ownable, IDHPVaul
     function withdraw(uint256 assets, address receiver, address owner_)
         public
         override
+        returns (uint256 shares)
+    {
+        // #29: plain exit — usage-platform share routes to the DAO.
+        // Guard lives on withdrawWithPlatform (see deposit note).
+        return withdrawWithPlatform(assets, receiver, owner_, address(0));
+    }
+
+    /// @notice #29: withdraw with the usage-platform attribution param.
+    function withdrawWithPlatform(uint256 assets, address receiver, address owner_, address usagePlatform_)
+        public
         nonReentrant
         returns (uint256 shares)
     {
@@ -525,7 +605,7 @@ contract DHPImplementation is ERC20, ReentrancyGuardTransient, Ownable, IDHPVaul
         // Dividend accrual + tax distribution happen AFTER the burn + transfer so
         // totalAssets() reflects the post-exit vault state (fee + burn sent out,
         // dividend portion still backing remaining shareholders).
-        _distributeTax(tax);
+        _distributeTax(tax, usagePlatform_);
         _accrueDividend(tax);
 
         emit Withdraw(msg.sender, receiver, owner_, assets, shares);
@@ -535,6 +615,16 @@ contract DHPImplementation is ERC20, ReentrancyGuardTransient, Ownable, IDHPVaul
     function redeem(uint256 shares, address receiver, address owner_)
         public
         override
+        returns (uint256 assets)
+    {
+        // #29: plain exit — usage-platform share routes to the DAO.
+        // Guard lives on redeemWithPlatform (see deposit note).
+        return redeemWithPlatform(shares, receiver, owner_, address(0));
+    }
+
+    /// @notice #29: redeem with the usage-platform attribution param.
+    function redeemWithPlatform(uint256 shares, address receiver, address owner_, address usagePlatform_)
+        public
         nonReentrant
         returns (uint256 assets)
     {
@@ -560,7 +650,7 @@ contract DHPImplementation is ERC20, ReentrancyGuardTransient, Ownable, IDHPVaul
         if (!acceptFeesFromTransfer && postBal - preBal != assets) revert FeeOnTransferToken();
 
         // Tax distribution + dividend accrual happen AFTER the burn + transfer.
-        _distributeTax(tax);
+        _distributeTax(tax, usagePlatform_);
         _accrueDividend(tax);
 
         emit Withdraw(msg.sender, receiver, owner_, assets, shares);
@@ -604,24 +694,25 @@ contract DHPImplementation is ERC20, ReentrancyGuardTransient, Ownable, IDHPVaul
         }
     }
 
-    /// @dev Send the dividend portion, the burn portion, and the protocol fee
-    ///      to their respective sinks.
-    ///      - dividend portion: stays in the vault, backs the dividend pool
-    ///      - protocol portion: sent to `feeCollector` (DAO-controlled)
-    ///      - burn portion: tracked in `burnedBalance` (lock-in-vault model).
-    ///        The tokens themselves do NOT leave the contract — they remain
-    ///        in the contract's balance but are subtracted from `totalAssets()`
-    ///        so they cannot be withdrawn by anyone. This makes the burn
-    ///        deflationary without depending on an external burn address,
-    ///        which would be blacklisted by USDT/USDC/BUSD-style tokens.
-    function _distributeTax(uint256 taxAmount) internal {
+    /// @dev Send every tax dollar to its sinks (#29 fixed split): dividends
+    ///      stay in the vault, burn locks in-vault, DAO rides the collector,
+    ///      three partner shares pay out (usage share follows `usagePlatform_`,
+    ///      zero → DAO fallback).
+    function _distributeTax(uint256 taxAmount, address usagePlatform_) internal {
+        // ── #29 fixed partner split (Carl: taxes are FIXED) ──────────────────
+        // dividends 80% · burn 10% · DAO 4% · creator 2% · creation-pl 2% ·
+        // usage-pl 2%. Dust from floor-divisions lands on the burn portion.
         uint256 dividendPortion = (taxAmount * dividendShareBps) / BPS;
-        uint256 protocolPortion = (taxAmount * PROTOCOL_FEE_BPS) / BPS;
-        uint256 burnPortion = taxAmount - dividendPortion - protocolPortion;
+        uint256 burnPortion = (taxAmount * WEIGHT_BURN_BPS) / BPS;
+        uint256 daoPortion = (taxAmount * WEIGHT_DAO_BPS) / BPS;
+        uint256 creatorPortion = (taxAmount * WEIGHT_CREATOR_BPS) / BPS;
+        uint256 creationPlatformPortion = (taxAmount * WEIGHT_CREATION_PLATFORM_BPS) / BPS;
+        uint256 usagePortion = (taxAmount * WEIGHT_USAGE_PLATFORM_BPS) / BPS;
 
-        if (protocolPortion > 0) {
-            _assetToken.safeTransfer(feeCollector, protocolPortion);
-        }
+        uint256 assigned = dividendPortion + burnPortion + daoPortion +
+            creatorPortion + creationPlatformPortion + usagePortion;
+        burnPortion += taxAmount - assigned;
+
         if (burnPortion > 0) {
             // Lock-in-vault burn: tokens stay in the contract but are
             // subtracted from totalAssets() so they're effectively burned.
@@ -629,7 +720,93 @@ contract DHPImplementation is ERC20, ReentrancyGuardTransient, Ownable, IDHPVaul
             emit TokensBurned(burnPortion);
         }
         // dividendPortion STAYS in the vault — it backs the dividend pool.
-        emit TaxCollected(0, taxAmount, dividendPortion, burnPortion, protocolPortion);
+
+        // DAO share (4%) rides the audited feeCollector rail — safeTransfer
+        // is correct here because the collector is protocol-owned.
+        if (daoPortion > 0) {
+            _assetToken.safeTransfer(feeCollector, daoPortion);
+        }
+
+        // Partner shares (2% each). Blacklist-proof pattern (v1.2.2 audit
+        // M-EXT-1): raw call, never reverts the user's tx, never donates —
+        // a failing recipient's share is booked to `stuckRevenue` — claimable
+        // by the entitled partner permissionlessly via `claimStuck()`; no
+        // admin path exists (factory renounce does NOT strand these funds).
+        _payPartner(0, vaultCreator, creatorPortion);
+        _payPartner(1, creationPlatform, creationPlatformPortion);
+        if (usagePlatform_ == address(0)) {
+            // #29 headless fallback: usage share follows the DAO rail.
+            if (usagePortion > 0) {
+                _assetToken.safeTransfer(feeCollector, usagePortion);
+                emit PartnerFeeRouted(3, feeCollector, usagePortion);
+            }
+        } else {
+            _payPartner(2, usagePlatform_, usagePortion);
+        }
+
+        emit TaxCollected(
+            0, taxAmount, dividendPortion, burnPortion,
+            daoPortion, creatorPortion, creationPlatformPortion, usagePortion
+        );
+    }
+
+    /// @dev #29: pay one external partner their tax share. Direct raw call —
+    ///      a reverting/blacklisted/out-of-gas recipient must NOT revert the
+    ///      depositor's transaction (DoS) and must NOT silently donate the
+    ///      funds. On failure the amount is booked to `stuckRevenue[partner]`
+    ///      and remains payable to the entitled partner ONLY via the
+    ///      permissionless `claimStuck()` (v1.2.2 audit M-EXT-1 pattern;
+    ///      owner sweeps deleted in v1.4.0 after Carl's security review).
+    function _payPartner(uint8 role, address partner, uint256 amount) internal {
+        if (amount == 0 || partner == address(0)) return;
+        uint256 preBal = _assetToken.balanceOf(address(this));
+        (bool ok, ) = address(_assetToken).call(abi.encodeCall(IERC20.transfer, (partner, amount)));
+        uint256 postBal = _assetToken.balanceOf(address(this));
+        // Paid = call succeeded AND vault balance fell by EXACTLY the amount
+        // (a hook that mints the vault tokens mid-transfer must not count).
+        if (ok && postBal < preBal && preBal - postBal == amount) {
+            emit PartnerFeeRouted(role, partner, amount);
+        } else {
+            stuckRevenue[partner] += amount;
+            totalStuckRevenue += amount;
+            emit PartnerFeeRouted(role, address(0), amount); // partner=0x0 → stuck
+        }
+    }
+
+    /// @notice #29: tokens booked as stuck when a partner transfer failed
+    ///         (blacklist, reverting receiver, gas-limited hook). These are
+    ///         LIABILITIES owed to a specific recipient — excluded from
+    ///         `totalAssets()` so they never back anyone's shares — and
+    ///         payable to the entitled partner ONLY via the permissionless
+    ///         `claimStuck()`. There is deliberately no owner/admin sweep:
+    ///         nobody can redirect a partner's earned revenue.
+    mapping(address partner => uint256 amount) public stuckRevenue;
+
+    /// @notice #29: sum of all booked stuck revenue. mirrors
+    ///         Σ `stuckRevenue` so `totalAssets()` can exclude liabilities
+    ///         in O(1) without iterating the partner mapping.
+    uint256 public totalStuckRevenue;
+
+    /// @notice #29: permissionless rescue — pays `partner`'s stuck revenue
+    ///         to the partner themselves. Anyone may trigger settlement
+    ///         (early settlement is harmless; the destination is hardwired
+    ///         and cannot be redirected). Reverts with the underlying
+    ///         token's error while the partner is still blacklisted or
+    ///         refusing — retry once they can receive.
+    function claimStuck(address partner) external nonReentrant {
+        // (v1.4.0, audit H-NEW-1) The nonReentrant guard is load-bearing: the
+        // payout transfer can re-enter THIS contract through the recipient's
+        // transfer hook, and without the guard a malicious partner wallet
+        // re-entered redeem() while the ledger decrements below were still
+        // pending — double extraction and honest-depositor impairment
+        // (PoC-proven in SELF_AUDIT_V1.4.0.md). Same guard family as every
+        // other state-mutating entry point on this vault.
+        uint256 amount = stuckRevenue[partner];
+        if (amount == 0) revert ZeroAmount();
+        stuckRevenue[partner] = 0;
+        totalStuckRevenue -= amount;
+        _assetToken.safeTransfer(partner, amount);
+        emit StuckRevenueClaimed(partner, amount);
     }
 
     /// @inheritdoc IDHPVault

@@ -79,15 +79,11 @@ contract DeploySmokeTest is Script {
 
         DHPFactory f = DHPFactory(factory);
 
-        // Create a vault for the test token. Use the same tax config we'd use
-        // for the real SPX6900 launch (5% entry, 10% exit, 70% dividend share).
-        DHPFactory.TaxConfig memory cfg = DHPFactory.TaxConfig({
-            entryTaxBps: 500,
-            exitTaxBps: 1_000,
-            dividendShareBps: 7_000,
-            acceptFeesFromTransfer: false
-        });
-        address vault = f.createVault(testToken, cfg);
+        // Create a vault for the test token. #29: taxes are FIXED — every
+        // vault ships the 5% entry / 10% exit / 80% dividend canon, there is
+        // no config to pass. Creator + creation platform = deployer.
+        address me = vm.addr(pk);
+        address vault = f.createVault(testToken, me, me);
         console2.log("Smoke-test vault deployed at:", vault);
 
         vm.stopBroadcast();

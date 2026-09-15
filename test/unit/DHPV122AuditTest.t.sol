@@ -31,13 +31,8 @@ contract DHPV122AuditTest is Test {
         vm.deal(address(this), 10 ether);
 
         token = new MockERC20("SPX6900", "SPX", 8);
-        DHPFactory.TaxConfig memory cfg = DHPFactory.TaxConfig({
-            entryTaxBps: 500,
-            exitTaxBps: 1_000,
-            dividendShareBps: 7_000,
-            acceptFeesFromTransfer: false
-        });
-        vault = DHPImplementation(payable(factory.createVault{value: 0.004 ether}(address(token), cfg)));
+        // #29: fixed canon, self-attributed wallets.
+        vault = DHPImplementation(payable(factory.createVault{value: 0.004 ether}(address(token), address(this), address(this))));
 
         token.mint(alice, 1_000_000e8);
         vm.prank(alice);
@@ -51,9 +46,11 @@ contract DHPV122AuditTest is Test {
         implementation.initialize(
             IERC20(address(token)),
             makeAddr("collector"),
+            address(this), // vaultCreator
+            address(this), // creationPlatform
             500,
             1_000,
-            7_000,
+            8_000,
             1e8,
             false
         );
@@ -70,15 +67,17 @@ contract DHPV122AuditTest is Test {
     function test_degenerate_state_reverts_on_pricing() public {
         vm.prank(alice);
         vault.deposit(200e8, alice);
-        // deposit(): net 190e8 shares; tax 10e8 -> div 7e8, fee 0.05e8, burn 2.95e8
-        assertEq(vault.totalBurned(), 2.95e8);
+        // deposit(): net 190e8 shares; tax 10e8 under the #29 split →
+        // div 8e8, burn 1e8, DAO 0.4e8, creator 0.2e8, creation-pl 0.2e8,
+        // usage 0.2e8 (plain call ⇒ DAO fallback).
+        assertEq(vault.totalBurned(), 1e8);
         uint256 vaultBal = token.balanceOf(address(vault));
-        assertEq(vaultBal, 199.95e8); // 200 in, 0.05 fee out
-        assertEq(vault.totalAssets(), 197e8); // 199.95 - 2.95
+        assertEq(vaultBal, 199e8); // 200 in, 1.0e8 partner+DAO shares out
+        assertEq(vault.totalAssets(), 198e8); // 199 - 1
 
         // Simulate a negative rebase: burn net assets out of the vault until
         // balanceOf == burnedBalance, i.e. totalAssets() == 0.
-        token.burn(address(vault), vaultBal - 2.95e8);
+        token.burn(address(vault), vaultBal - 1e8);
         assertEq(token.balanceOf(address(vault)), vault.totalBurned());
 
         // totalAssets() itself still returns 0 legitimately (require passes).
@@ -97,6 +96,6 @@ contract DHPV122AuditTest is Test {
         vault.redeem(1e8, alice, alice);
 
         // The locked tokens are untouched.
-        assertEq(token.balanceOf(address(vault)), 2.95e8);
+        assertEq(token.balanceOf(address(vault)), 1e8);
     }
 }

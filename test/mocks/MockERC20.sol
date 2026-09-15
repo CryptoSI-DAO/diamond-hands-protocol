@@ -31,7 +31,7 @@ contract MockERC20 is ERC20 {
 
     /// @dev Apply fee-on-transfer if `feeBps > 0`. Sender gets `amount`,
     ///      recipient gets `amount * (BPS - feeBps) / BPS`. BPS = 10_000.
-    function _update(address from, address to, uint256 value) internal override {
+    function _update(address from, address to, uint256 value) internal virtual override {
         if (feeBps > 0 && from != address(0) && to != address(0)) {
             uint256 fee = (value * feeBps) / 10_000;
             uint256 net = value - fee;

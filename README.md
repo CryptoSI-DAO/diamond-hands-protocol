@@ -2,9 +2,9 @@
 
 > *Paper hands fund diamond hands. On-chain. Forever.*
 
-**Current version: v1.3.0** — Fix #26: unclaimed dividend IOUs excluded from backing (totalAssets). 75 tests passing across 5 suites. Ready for external audit.
+**Current version: v1.4.0-rc** — #27 free-market creation + #28 CRDD minting tier + #29 partner revenue split. 101 permanent tests passing. Live testnet deployments below are v1.3.0; mainnet launch pending the v1.4.0 merge + deploy.
 
-[📄 **Latest self-audit: `SELF_AUDIT_V1.2.2.md`**](SELF_AUDIT_V1.2.2.md) · [🔒 SECURITY.md](SECURITY.md) · [📋 AUDIT_SCOPE.md](AUDIT_SCOPE.md) · [🔗 ERC-4626 compatibility](ERC4626_COMPATIBILITY.md)
+[📄 **Latest self-audit: `SELF_AUDIT_V1.4.0.md`**](SELF_AUDIT_V1.4.0.md) — 1 Critical found & **FIXED** (claimStuck reentrancy, PoC-verified → regression-pinned) · [🔒 SECURITY.md](SECURITY.md) · [📋 AUDIT_SCOPE.md](AUDIT_SCOPE.md) · [🔗 ERC-4626 compatibility](ERC4626_COMPATIBILITY.md)
 
 ---
 
@@ -41,10 +41,11 @@
 | [v1.2.1](SELF_AUDIT_V1.2.1.md) | 0 | 0 | 0 | All carried mediums fixed |
 | **[v1.2.2](SELF_AUDIT_V1.2.2.md)** | **0** | **0** | **1 (governance docs)** | Fresh-eyes full-codebase pass (Lisa). M-NEW-1 + 3 low + 6 informational → **all fixed in v1.2.2** |
 | **v1.3.0** | 0 | 0 | 0 | Fix #26: unclaimed dividend IOUs excluded from `totalAssets()` backing; 75 tests passing |
+| **[v1.4.0](SELF_AUDIT_V1.4.0.md)** | **1** | 0 | **1** | Fresh-eyes full-codebase pass over the #27–#29 stack (Lisa, 2026-09-15). H-NEW-1: `claimStuck` cross-function reentrancy — PoC-verified, **fixed same day** (`nonReentrant`, regression-pinned; tripwire-validated harness). M-NEW-1: legacy `initialize` bounds predate #29 weights — **fixed** (full weight-sum check). Doc rot swept; dead errors removed; fuzz harness covers the partner/hook surface. **All findings closed.** |
 
-**All critical, high, and medium findings from all passes are now closed.**
+**All v1.4.0 audit findings are CLOSED** (H-NEW-1 fixed + regression-pinned, M-NEW-1 fixed, doc/dead-code sweep done, fuzz harness covers the partner/hook surface — harness tripwire validated: detects the pre-fix bug). Original report: [SELF_AUDIT_V1.4.0.md](SELF_AUDIT_V1.4.0.md); PoCs preserved in git history @ `10ee35b`.
 
-**Tests:** 75 of 75 passing across 5 suites (72 unit + 3 fuzz; fuzz verified at 1000 runs).
+**Tests:** 101 of 101 permanent tests passing (incl. the 2 former PoCs, now regression tests; fuzz harness re-verified at 10,000 runs).
 
 ### What changed in v1.3.0
 

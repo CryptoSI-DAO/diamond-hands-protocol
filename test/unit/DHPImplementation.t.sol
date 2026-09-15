@@ -33,7 +33,7 @@ contract DHPImplementationTest is Test {
 
     uint16 constant ENTRY_TAX = 500;     // 5%
     uint16 constant EXIT_TAX = 1_000;    // 10%
-    uint16 constant DIV_SHARE = 7_000;   // 70% of tax → dividends
+    uint16 constant DIV_SHARE = 8_000;   // 80% of tax → dividends (#29 canon)
 
     function setUp() public {
         // Deploy the canonical implementation.
@@ -54,15 +54,11 @@ contract DHPImplementationTest is Test {
         // Deploy a standard ERC-20 (no fee-on-transfer).
         token = new MockERC20("SPX6900", "SPX", 8);
 
-        // Have the factory create a vault.
-        DHPFactory.TaxConfig memory cfg = DHPFactory.TaxConfig({
-            entryTaxBps: ENTRY_TAX,
-            exitTaxBps: EXIT_TAX,
-            dividendShareBps: DIV_SHARE,
-            acceptFeesFromTransfer: false
-        });
+        // Have the factory create a vault (#29: fixed canon, self-attributed).
         uint256 creationFee = factory.VAULT_CREATION_FEE();
-        vault = DHPImplementation(factory.createVault{value: creationFee}(address(token), cfg));
+        vault = DHPImplementation(
+            factory.createVault{value: creationFee}(address(token), address(this), address(this))
+        );
         v = IDHPVault(address(vault));
 
         // Mint to users.
@@ -103,38 +99,38 @@ contract DHPImplementationTest is Test {
         assertEq(shares, 9_500e8, "first deposit shares = post-tax net");
         assertEq(vault.balanceOf(alice), shares, "alice share balance");
         // totalAssets = vault's underlying balance - burnedBalance
-        //   vault balance = 10_000 SPX - 2.5 SPX fee = 9_997.5 SPX = 999_750_000_000 raw
-        //   burnedBalance = 147.5 SPX = 14_750_000_000 raw (locked in vault)
-        //   totalAssets = 999_750_000_000 - 14_750_000_000 = 985_000_000_000 raw
-        //   = 9_500e8 (backing 9_500 shares) + 350e8 (dividend pool) + 147.5e8 (locked burn)
-        //   - 2.5e8 (the fee portion that already left the vault)
-        //   = 9_850 SPX total
-        assertEq(v.totalAssets(), 985_000_000_000, "totalAssets after fee out + burn locked");
+        //   tax = 500 SPX → div 400 · burn 50 · DAO 20 · creator 10 ·
+        //         creation-pl 10 · usage 10 (plain call → DAO fallback)
+        //   vault balance = 10_000 - 30 (collector) - 20 (creator+creation-pl
+        //         paid out to this test contract) = 9_950 SPX
+        //   totalAssets = 9_950 - 50 (burned) = 9_900 SPX = 9_500 shares
+        //         + 400 dividend pool (exact — no dust at these sizes)
+        assertEq(v.totalAssets(), 990_000_000_000, "totalAssets after payouts + burn locked");
         assertEq(vault.totalSupply(), shares, "totalSupply = shares minted (no dead share)");
     }
 
     function test_entry_tax_split_is_correct() public {
         // Token has 8 decimals. 10_000e8 raw = 10_000 SPX deposit.
-        // 5% entry tax = 500 SPX tax = 5_000_000_000 raw
-        //   dividend share = 70% of 500 SPX = 350 SPX = 3_500_000_000 raw → stays in vault
-        //   protocol fee   = 0.5% of 500 SPX = 2.5 SPX = 250_000_000 raw → feeCollector
-        //   burn           = 500 - 350 - 2.5 = 147.5 SPX = 14_750_000_000 raw → LOCKED IN VAULT
-        //   (no longer sent to BURN_SINK because that would DoS on USDT/USDC/BUSD
-        //    which blacklist 0x…dEaD — see audit fix C-2)
+        // 5% entry tax = 500 SPX tax. #29 fixed split (bps of tax):
+        //   dividends      = 80% → 400 SPX (stays in vault)
+        //   burn           = 10% →  50 SPX (locked in vault)
+        //   DAO            =  4% →  20 SPX → feeCollector
+        //   creator        =  2% →  10 SPX → this contract (it created)
+        //   creation plat. =  2% →  10 SPX → this contract
+        //   usage plat.    =  2% →  10 SPX → plain call ⇒ DAO fallback
+        //   ⇒ feeCollector total = 30 SPX = 3_000_000_000 raw
         uint256 depositAmt = 10_000e8;
         uint256 feeCollectorBefore = token.balanceOf(address(feeCollector));
+        uint256 selfBefore = token.balanceOf(address(this));
 
         vm.prank(alice);
         v.deposit(depositAmt, alice);
 
-        assertEq(token.balanceOf(address(feeCollector)) - feeCollectorBefore, 250_000_000, "protocol fee = 0.5% of 500 SPX tax (2.5 SPX)");
-        // The burn is locked in the vault (not sent to any address). Verify via
-        // the burnedBalance public storage variable.
-        assertEq(vault.burnedBalance(), 14_750_000_000, "burnedBalance = 500 - 350 - 2.5 SPX (147.5 SPX locked)");
-        // Vault holds 10_000 SPX minus the 2.5 SPX fee that was sent to feeCollector.
-        assertEq(token.balanceOf(address(vault)), 999_750_000_000, "vault balance = 10_000 SPX - 2.5 SPX fee");
-        // totalAssets() = vault balance - burnedBalance = 9997.5 - 147.5 = 9850 SPX = 985_000_000_000 raw
-        assertEq(v.totalAssets(), 985_000_000_000, "totalAssets = balance - burned");
+        assertEq(token.balanceOf(address(feeCollector)) - feeCollectorBefore, 3_000_000_000, "DAO 20 + usage-fallback 10 SPX");
+        assertEq(token.balanceOf(address(this)) - selfBefore, 2_000_000_000, "creator 10 + creation-pl 10 SPX");
+        assertEq(vault.burnedBalance(), 5_000_000_000, "burn = 50 SPX locked");
+        assertEq(token.balanceOf(address(vault)), 995_000_000_000, "vault balance = 10_000 - 50 payout");
+        assertEq(v.totalAssets(), 990_000_000_000, "totalAssets = balance - burned");
     }
 
     function test_dividend_accrual_on_deposit() public {
@@ -147,16 +143,15 @@ contract DHPImplementationTest is Test {
         assertEq(rpTs1, 0, "rpTs=0 after first deposit (no shareholders yet)");
 
         // Second deposit: existing supply exists; index now advances.
-        // Bob deposits 10_000 SPX. Tax = 500 SPX, dividend portion = 350 SPX.
-        // rpTs = (350 SPX * 1e18) / supply_at_accrual
+        // Bob deposits 10_000 SPX. Tax = 500 SPX, dividend portion = 400 SPX.
+        // rpTs = (400 SPX * 1e18) / supply_at_accrual
         // supply at accrual = alice's post-tax shares = 9_500e8 (9_500 SPX).
-        // rpTs = (3.5e10 * 1e18) / 9.5e11 = 3.684e16
         vm.prank(bob);
         v.deposit(10_000e8, bob);
 
         uint256 rpTs2 = v.rewardPerTokenStored();
         assertGt(rpTs2, 0, "rpTs advances after second deposit");
-        uint256 expectedRpTs = uint256(350) * uint256(1e8) * 1e18 / uint256(9_500e8);
+        uint256 expectedRpTs = uint256(400) * uint256(1e8) * 1e18 / uint256(9_500e8);
         assertApproxEqRel(rpTs2, expectedRpTs, 1e15);
 
         // Alice's unclaimed dividends should be > 0 (she held shares when the
@@ -278,10 +273,10 @@ contract DHPImplementationTest is Test {
             "alice (sole holder pre-Bob) got Bob's tax");
 
         // The total dividend distributed to existing shareholders equals
-        // Carol's dividend portion = 3500 SPX = 3.5e10 raw.
-        // aliceDelta + bobDelta should approximately equal that (minus rounding).
+        // The total dividend distributed to existing shareholders equals
+        // Carol's dividend portion = 4000 SPX = 4e10 raw (80% of 5000 tax).
         uint256 totalDelta = aliceDelta + bobDelta;
-        uint256 carolDividendPortion = 3_500e8; // 3500 SPX
+        uint256 carolDividendPortion = 4_000e8; // 4000 SPX
         assertApproxEqRel(totalDelta, carolDividendPortion, 1e12);
     }
 
@@ -311,17 +306,10 @@ contract DHPImplementationTest is Test {
         fot.setFee(500); // 5%
 
         // We test the vault's anti-FOT gate directly by calling deposit.
-        // First create a vault for FOT through the factory. The factory only
-        // checks `decimals()` (which FOT passes); FOT detection happens at
-        // deposit time.
-        DHPFactory.TaxConfig memory cfg = DHPFactory.TaxConfig({
-            entryTaxBps: 100,
-            exitTaxBps: 100,
-            dividendShareBps: 7_000,
-            acceptFeesFromTransfer: false
-        });
+        // First create a vault for FOT through the factory (#29: fixed canon,
+        // strict FOT mode). FOT detection happens at deposit time.
         uint256 creationFee = factory.VAULT_CREATION_FEE();
-        address fotVault = factory.createVault{value: creationFee}(address(fot), cfg);
+        address fotVault = factory.createVault{value: creationFee}(address(fot), address(this), address(this));
         fot.mint(alice, 1_000e18);
         vm.prank(alice);
         fot.approve(fotVault, type(uint256).max);
@@ -353,7 +341,7 @@ contract DHPImplementationTest is Test {
         vm.prank(alice);
         v.deposit(10_000e8, alice); // 9_500 shares, totalAssets = 10_000
         vm.prank(bob);
-        v.deposit(10_000e8, bob);   // +9_500 shares, +9_850 totalAssets (less tax/burn)
+        v.deposit(10_000e8, bob);   // +9_500 shares, +9_900 totalAssets (less tax/burn)
 
         // share price = totalAssets / totalSupply = 19_850 / 19_000 ≈ 1.0447
         uint256 sharePrice = (v.totalAssets() * 1e18) / vault.totalSupply();
@@ -400,13 +388,13 @@ contract DHPImplementationTest is Test {
 
         vm.prank(alice);
         v.deposit(10_000e8, alice);
-        // First deposit: tax=500 SPX, burn=147.5 SPX = 14_750_000_000 raw
-        assertEq(vault.totalBurned(), 14_750_000_000, "burn after first deposit");
+        // First deposit: tax=500 SPX, burn=10% = 50 SPX = 5_000_000_000 raw
+        assertEq(vault.totalBurned(), 5_000_000_000, "burn after first deposit");
 
         vm.prank(bob);
         v.deposit(10_000e8, bob);
-        // Second deposit: another 14.75 SPX burned
-        assertEq(vault.totalBurned(), 29_500_000_000, "burn accumulates");
+        // Second deposit: another 50 SPX burned
+        assertEq(vault.totalBurned(), 10_000_000_000, "burn accumulates");
     }
 
     function test_min_first_deposit_configured_correctly() public {
@@ -430,12 +418,12 @@ contract DHPImplementationTest is Test {
         v.deposit(10_000e8, alice);
         uint256 vaultBalBefore = token.balanceOf(address(vault));
         assertGt(vaultBalBefore, 0, "vault has tokens");
-        assertEq(v.totalAssets(), 985_000_000_000, "totalAssets before rebase");
+        assertEq(v.totalAssets(), 990_000_000_000, "totalAssets before rebase");
 
         // Simulate a SEVERE negative rebase: burn enough to drop balance
-        // below burnedBalance. burnedBalance = 14_750_000_000 (~147.5 SPX).
-        // We burn so balance drops from 999_750_000_000 to ~1.
-        token.burn(address(vault), 999_000_000_000); // burn 9,990 SPX
+        // below burnedBalance (50 SPX under the #29 split). Vault holds
+        // 995 SPX; burn 990.5 so 4.5 SPX remain < 50 burned.
+        token.burn(address(vault), 990_500_000_000);
 
         uint256 balAfter = token.balanceOf(address(vault));
         assertLt(balAfter, vault.burnedBalance(), "rebase simulated");
@@ -512,50 +500,50 @@ contract DHPImplementationTest is Test {
     }
 
     function test_accept_fees_from_transfer_true_accepts_fot() public {
-        // M-CARRIED-1: when a vault is created with `acceptFeesFromTransfer=true`,
-        // the anti-FOT balance check is bypassed. FOT tokens can be deposited.
+        // M-CARRIED-1: when a vault is initialized with
+        // `acceptFeesFromTransfer=true`, the anti-FOT balance check is
+        // bypassed. FOT tokens can be deposited.
+        // (#29: the fixed canon always ships strict mode — the factory cannot
+        // create a permissive vault. To keep exercising the permissive code
+        // path, we initialize a raw clone directly.)
         MockERC20 fot = new MockERC20("FOT", "FOT", 18);
         fot.setFee(500); // 5% FOT
 
-        DHPFactory.TaxConfig memory cfg = DHPFactory.TaxConfig({
-            entryTaxBps: 100,
-            exitTaxBps: 100,
-            dividendShareBps: 7_000,
-            acceptFeesFromTransfer: true  // <-- the new flag
-        });
-        uint256 creationFee = factory.VAULT_CREATION_FEE();
-        address fotVault = factory.createVault{value: creationFee}(address(fot), cfg);
+        address permissiveVault = Clones.clone(address(implementation));
+        DHPImplementation(payable(permissiveVault)).initialize(
+            IERC20(address(fot)),
+            address(feeCollector),
+            address(this), // vaultCreator
+            address(this), // creationPlatform
+            500, 1_000, 8_000,
+            10 ** 18,      // minFirstDeposit = 1.0 token
+            true           // acceptFeesFromTransfer
+        );
 
         assertTrue(
-            DHPImplementation(fotVault).acceptFeesFromTransfer(),
+            DHPImplementation(permissiveVault).acceptFeesFromTransfer(),
             "vault is in permissive mode"
         );
 
         fot.mint(alice, 1_000e18);
         vm.prank(alice);
-        fot.approve(fotVault, type(uint256).max);
+        fot.approve(address(permissiveVault), type(uint256).max);
 
         // In permissive mode, deposit should succeed even though the token
         // takes a 5% fee on transfer.
         vm.prank(alice);
-        uint256 shares = IDHPVault(fotVault).deposit(100e18, alice);
+        uint256 shares = IDHPVault(permissiveVault).deposit(100e18, alice);
         assertGt(shares, 0, "FOT deposit succeeds in permissive mode");
     }
 
     function test_accept_fees_from_transfer_false_rejects_fot() public {
-        // M-CARRIED-1 (control): in strict mode (default), FOT tokens are
-        // rejected (revert with FeeOnTransferToken).
+        // M-CARRIED-1 (control): the fixed canon ships strict mode, so a
+        // factory-created vault rejects FOT tokens (FeeOnTransferToken).
         MockERC20 fot = new MockERC20("FOT", "FOT", 18);
         fot.setFee(500); // 5% FOT
 
-        DHPFactory.TaxConfig memory cfg = DHPFactory.TaxConfig({
-            entryTaxBps: 100,
-            exitTaxBps: 100,
-            dividendShareBps: 7_000,
-            acceptFeesFromTransfer: false  // <-- strict mode (default)
-        });
         uint256 creationFee = factory.VAULT_CREATION_FEE();
-        address fotVault = factory.createVault{value: creationFee}(address(fot), cfg);
+        address fotVault = factory.createVault{value: creationFee}(address(fot), address(this), address(this));
 
         assertFalse(
             DHPImplementation(fotVault).acceptFeesFromTransfer(),
