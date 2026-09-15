@@ -63,11 +63,19 @@ Run: `forge test` (no flags needed).
 ## Reproduction
 
 ```bash
-git clone --branch feat/v1-core-contracts https://github.com/CryptoSI-DAO/diamond-hands-protocol
+git clone --branch feat/partner-split https://github.com/CryptoSI-DAO/diamond-hands-protocol
 cd diamond-hands-protocol
 forge install
 forge test -vv
 ```
+
+> **v1.4.0-rc scope note (2026-09-15 self-audit, [SELF_AUDIT_V1.4.0.md](SELF_AUDIT_V1.4.0.md)):**
+> audit branch is `feat/partner-split` @ `10ee35b` (v1.3.0 `560b6b9` + #27 free-market + #28 CRDD tier + #29 partner split).
+> In-surface grew to **1,591 LOC** (Implementation 856 · Factory 412 · FeeCollector 146 · IDHPVault 177) · **97 permanent tests + 2 audit PoCs**.
+> New since the v1.x passes: 6-way fixed tax split, permissionless `claimStuck`, liability-adjusted `totalAssets()`,
+> `*WithPlatform` entry points, CRDD fee-free tier, free-market creation. That pass found **H-NEW-1 (Critical,
+> `claimStuck` cross-function reentrancy, PoC-verified)** — fix proposed, not yet applied; mainnet deploy blocked on it.
+> Testnet addresses below are v1.3.0-era; v1.4.0 deploys after the fix pass.
 
 ## Live on Base Sepolia
 
