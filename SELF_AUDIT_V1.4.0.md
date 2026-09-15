@@ -127,3 +127,26 @@ Both exploits were found by **manual reentrancy walking**, not by the fuzz harne
 ---
 
 *This report is a self-audit by an AI agent with fresh eyes on the full codebase — including code the agent itself wrote earlier in this cycle, which is exactly where H-NEW-1 was hiding. It does NOT replace an external audit; it exists to make that audit cheaper.*
+
+---
+
+## 📎 Addendum A1 — Fix pass (same day, 2026-09-15)
+
+**All findings applied and closed** in commit `b406574` (Carl approved: "repair the issues that the self audit brought to light"). Verification evidence:
+
+| Finding | Fix | Verification |
+|---|---|---|
+| H-NEW-1 (Critical) | `nonReentrant` on `claimStuck()` + load-bearing comment; contract header reentrancy note extended | Both former PoCs (`test/unit/PoC_ClaimStuckReentrancy.t.sol`) flipped to regression tests: attack reverts with **zero** state movement (balances, shares, ledger all pinned); friendly settlement then pays exactly the stuck sum; variant B victim remains fully redeemable at pre-state pricing. PASS |
+| M-NEW-1 (Medium) | `initialize()` validates the full #29 weight sum; `MAX_DIVIDEND_SHARE_BPS` 9_000 → 8_000; `PROTOCOL_FEE_BPS` deleted | `test/unit/InitializeWeightSum.t.sol`: 9_000 and 8_001 revert `InvalidBpsConfiguration` (on a fresh clone — the impl is born pre-initialised per v1.2.2 I-NEW-2), 8_000 (canon) accepts. PASS |
+| L-NEW-1 (Low) | Doc sweep: all 4 contract headers to #29 economics; `_payPartner` ghost `sweepStuck` reference corrected; factory TaxConfig/0.001/FOT-flag story rewritten; collector 4%(+2%) share; dead errors `TokenAlreadyHasVault`/`InvalidTaxConfig` removed from bytecode | `forge build` clean; grep: zero references to deleted symbols |
+| I-NEW-1 | Factory write-only `creatorWallet`/`creationPlatformWallet` storage removed | Params + `VaultCreated` event retained; zero getters existed (verified pre-delete) |
+| I-NEW-2 | `ERC4626_COMPATIBILITY.md` → v1.4.0: `totalAssets()` liability formula updated; divergences #11–13 added (fixed canon, WithPlatform attribution, stuck revenue); checklist extended; README audit status → all closed | Docs reviewed against code |
+| I-NEW-3 | Fuzz harness (`DHPFuzzWalk.t.sol`) rebuilt: hook-capable token (`onTokenTransfer` selector matched to partner contracts), 3-mode partner (refuse → books real stuck revenue; greedy → the attack; friendly → settlement), `claimStuck` op band, F6a liability-cover + F6b greedy-claim-must-revert invariants | **Tripwire validated both ways:** 10,000 runs × 2 tests green WITH the fix; with the fix temporarily removed the walk **fails on run 2** ("F6b: greedy claim succeeded", counterexample seed pinned). A tripwire that can't fire is decoration — this one fires. |
+
+**Suite status:** **101/101 across 10 suites** (99 prior + 2 regression suites expanded); fresh clone at `47005e7` 99/99, re-verified post-fix at `b406574` build + full suite.
+
+**On-chain smoke (chain-id 845 rehearsal, post-fix contracts):** deploy + read-backs green → `createVault` with 0.004 ETH fee → canon read back on the clone (500/1000/8000, strict FOT, immutable partner wallets) → 10,000 SPX deposit split **raw-wei exact** (creator 10 / platform 10 / collector 30 / burn 50) → second deposit accrues 400 to `totalUnclaimed` → `claimDividend` pays 399.999999999 (the documented 1-wei I-NEW-5 dust) → exit redeem splits exactly (burn +4.75/collect +2.85/creator +0.95/platform +0.95 per 47.5 tax, redeemer net +427.5, dividend 38 reserved) → `totalStuckRevenue` 0 throughout.
+
+**Carried (documented, no action):** first-deposit dividend portion backs shares instead of seeding the pool (v1.0-era Synthetix semantics — supply is 0 at the first accrual; first depositor shortchanges only themselves into common backing; `TaxCollected` still reports the portion, so indexers summing `totalUnclaimed` deltas should anchor on claims). Logged for the next audit pass; economically benign.
+
+**Launch gate status:** NO-GO lifted at the contract level. Remaining before mainnet: merge `feat/partner-split` → `main` (with the app's launch-hour commit), Carl funds the burner, treasury confirm, GO.
