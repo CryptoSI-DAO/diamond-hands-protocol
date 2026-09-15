@@ -6,9 +6,9 @@ import {DHPImplementation} from "../src/contracts/DHPImplementation.sol";
 import {DHPFactory} from "../src/contracts/DHPFactory.sol";
 import {DHPFeeCollector} from "../src/contracts/DHPFeeCollector.sol";
 
-/// @title  Deploy DHP to Base Mainnet (chain 845)
+/// @title  Deploy DHP to Base Mainnet (chain 8453)
 /// @notice Mainnet-hardened variant of Deploy.s.sol. Differences:
-///         1. Hard chain-id gate - refuses to run against any RPC but Base (845).
+///         1. Hard chain-id gate - refuses to run against any RPC but Base (8453).
 ///         2. Treasury sanity gates - non-zero, not 0xdEaD, not the deployer.
 ///            (v1.3.0 Sepolia lesson: the env held a LOST key's address and the
 ///            FeeCollector was deployed pointing at it - every sweep without a
@@ -38,7 +38,7 @@ contract DeployMainnetScript is Script {
         address curator = vm.envAddress("DAO_CURATOR_BASE_MAINNET");
 
         // ---- Pre-flight gates (fail loudly BEFORE any signature) ---------------
-        require(block.chainid == 845, "DHP: not Base mainnet (845)");
+        require(block.chainid == 8453, "DHP: not Base mainnet (8453)");
         require(daoTreasury != address(0), "DHP: treasury is zero address");
         require(daoTreasury != 0x000000000000000000000000000000000000dEaD, "DHP: treasury is 0xdEaD");
         require(daoTreasury != deployer, "DHP: treasury must differ from deployer burner");
