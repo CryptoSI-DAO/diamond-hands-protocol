@@ -8,10 +8,12 @@ import {Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
 import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
 
 /// @title  DHPFeeCollector
-/// @notice Accumulates the 0.5% protocol fee from every Diamond Hands Vault,
+/// @notice Accumulates the DAO's share of every Diamond Hands Vault tax —
+///         4% under the v1.4.0 #29 fixed split, plus the 2% usage-platform
+///         share on headless calls (usagePlatform = 0x0 → DAO fallback) —
 ///         token-by-token, and lets the DAO treasury sweep each balance on
 ///         demand.
-/// @dev    Per the vault design, every vault sends its 0.5% protocol share
+/// @dev    Per the vault design, every vault sends its DAO-rail share
 ///         directly to this contract on every deposit/withdraw. This contract
 ///         does not own those tokens; vaults just `safeTransfer` here.
 ///
@@ -76,7 +78,7 @@ contract DHPFeeCollector is Ownable2Step, ReentrancyGuardTransient {
     // Vault-side: receive fees
     // ──────────────────────────────────────────────────────────────────────────
 
-    /// @notice Vaults route their 0.5% protocol share here via plain
+    /// @notice Vaults route their DAO-rail tax share here via plain
     ///         `safeTransfer` — no hook call is needed or used, and the
     ///         balance is implicit in `IERC20(token).balanceOf(address(this))`.
     ///         Indexers should track fee inflows via each vault's

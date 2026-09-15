@@ -17,12 +17,21 @@ import {IDHPVault} from "../interfaces/IDHPVault.sol";
 ///         each user-facing vault is an EIP-1167 minimal proxy over this
 ///         contract, initialised with one specific underlying ERC-20.
 ///
-///         Per-vault economic model:
-///         - Entry tax `entryTaxBps` on deposit. Split into:
-///             • `dividendShareBps` of the tax → pro-rata dividend pool
-///             • 0.5% protocol fee → `feeCollector`
-///             • Remainder → `0x…dEaD` (burned forever)
-///         - Exit tax `exitTaxBps` on withdraw — same split.
+///         Per-vault economic model (v1.4.0, #29 fixed canon):
+///         - Taxes are FIXED: 5% entry / 10% exit — creators cannot
+///           configure them (the factory hardwires the canon).
+///         - Every tax splits six ways (#29 weights, fixed in code):
+///             • 80% → pro-rata dividend pool (dividendShareBps = 8_000)
+///             • 10% → burned (lock-in-vault, tracked in burnedBalance)
+///             •  4% → DAO, via `feeCollector`
+///             •  2% → vault creator (immutable, set at creation)
+///             •  2% → creation platform (immutable, set at creation)
+///             •  2% → usage platform (per-tx param; 0x0 → DAO fallback)
+///         - Exit tax `exitTaxBps` on withdraw — same six-way split.
+///         - Partner payouts that fail (blacklist/reverting receiver) are
+///           booked to `stuckRevenue` — a named-recipient liability,
+///           excluded from share pricing, claimable permissionlessly via
+///           `claimStuck()`. No admin path can redirect or sweep them.
 ///         - Dividends accrue via Synthetix StakingRewards math:
 ///             `rewardPerTokenStored` ticks up by
 ///               `(dividendAmount * 1e18) / totalSupply`
@@ -40,6 +49,10 @@ import {IDHPVault} from "../interfaces/IDHPVault.sol";
 ///         holds no shares and no settled rewards, so every re-entry path is
 ///         inert. This separation is what makes per-function `nonReentrant`
 ///         sufficient — do not "simplify" the two-token split away.
+///         (v1.4.0, audit H-NEW-1) Additionally, EVERY state-mutating entry
+///         point carries `nonReentrant` — including `claimStuck`, whose
+///         payout window was PoC-proven reentrable through a malicious
+///         partner wallet's transfer hook before the fix.
 ///
 ///         Share accounting follows the standard ERC-4626 formula, but the
 ///         deposit/withdraw entry-points apply tax first and then mint/burn
@@ -58,8 +71,6 @@ contract DHPImplementation is ERC20, ReentrancyGuardTransient, Ownable, IDHPVaul
     uint16 internal constant BPS = 10_000;
     uint16 internal constant MAX_ENTRY_TAX_BPS = 1_000;  // 10%
     uint16 internal constant MAX_EXIT_TAX_BPS = 2_500;   // 25%
-    uint16 internal constant PROTOCOL_FEE_BPS = 50;      // 0.5%
-    uint16 internal constant MAX_DIVIDEND_SHARE_BPS = 9_000; // 90%
 
     // ── #29 partner-split weights (bps OF TAX). FIXED at launch (Carl) —
     //    same ratio on entry and exit. Sum + DIVIDEND = 10_000 exactly. ──
@@ -68,6 +79,14 @@ contract DHPImplementation is ERC20, ReentrancyGuardTransient, Ownable, IDHPVaul
     uint16 internal constant WEIGHT_CREATOR_BPS = 200;           //  2% of tax → vault creator
     uint16 internal constant WEIGHT_CREATION_PLATFORM_BPS = 200; //  2% of tax → creation platform
     uint16 internal constant WEIGHT_USAGE_PLATFORM_BPS = 200;    //  2% of tax → usage platform
+
+    /// @dev (v1.4.0, audit M-NEW-1) TRUE bound on the dividend share under the
+    ///      #29 fixed split: dividend + burn(1000) + DAO(400) + 3×200 partner
+    ///      weights ≤ 10_000 ⇒ dividend ≤ 8_000. The old `MAX_DIVIDEND_SHARE_BPS
+    ///      = 9_000` and the `dividendShare + PROTOCOL_FEE_BPS` check both
+    ///      predate the partner weights and admitted a config that would
+    ///      underflow `_distributeTax` (vault bricks on first deposit).
+    uint16 internal constant MAX_DIVIDEND_SHARE_BPS = 8_000; // 80% of tax
 
     /// @dev The burn mechanism is the "lock-in-vault" model (tracked in
     ///      `burnedBalance`, subtracted from `totalAssets()` for share-price
@@ -218,7 +237,14 @@ contract DHPImplementation is ERC20, ReentrancyGuardTransient, Ownable, IDHPVaul
         if (vaultCreator_ == address(0) || creationPlatform_ == address(0)) revert ZeroAddress();
         if (entryTaxBps_ > MAX_ENTRY_TAX_BPS) revert InvalidBpsConfiguration();
         if (exitTaxBps_ > MAX_EXIT_TAX_BPS) revert InvalidBpsConfiguration();
-        if (dividendShareBps_ + PROTOCOL_FEE_BPS > BPS) revert InvalidBpsConfiguration();
+        // (v1.4.0, audit M-NEW-1) Validate the FULL #29 weight sum, not the
+        // pre-#29 "dividend + 0.5% fee" invariant. A legacy 9_000-dividend
+        // config would make `taxAmount - assigned` underflow in
+        // `_distributeTax`, bricking every deposit/withdraw on the clone.
+        if (dividendShareBps_ + WEIGHT_BURN_BPS + WEIGHT_DAO_BPS +
+            WEIGHT_CREATOR_BPS + WEIGHT_CREATION_PLATFORM_BPS + WEIGHT_USAGE_PLATFORM_BPS > BPS) {
+            revert InvalidBpsConfiguration();
+        }
 
         _vaultInitialised = true;
         factory = msg.sender;
@@ -728,7 +754,9 @@ contract DHPImplementation is ERC20, ReentrancyGuardTransient, Ownable, IDHPVaul
     ///      a reverting/blacklisted/out-of-gas recipient must NOT revert the
     ///      depositor's transaction (DoS) and must NOT silently donate the
     ///      funds. On failure the amount is booked to `stuckRevenue[partner]`
-    ///      and remains redeemable via `sweepStuck()` (factory-owner gated).
+    ///      and remains payable to the entitled partner ONLY via the
+    ///      permissionless `claimStuck()` (v1.2.2 audit M-EXT-1 pattern;
+    ///      owner sweeps deleted in v1.4.0 after Carl's security review).
     function _payPartner(uint8 role, address partner, uint256 amount) internal {
         if (amount == 0 || partner == address(0)) return;
         uint256 preBal = _assetToken.balanceOf(address(this));
@@ -765,7 +793,14 @@ contract DHPImplementation is ERC20, ReentrancyGuardTransient, Ownable, IDHPVaul
     ///         and cannot be redirected). Reverts with the underlying
     ///         token's error while the partner is still blacklisted or
     ///         refusing — retry once they can receive.
-    function claimStuck(address partner) external {
+    function claimStuck(address partner) external nonReentrant {
+        // (v1.4.0, audit H-NEW-1) The nonReentrant guard is load-bearing: the
+        // payout transfer can re-enter THIS contract through the recipient's
+        // transfer hook, and without the guard a malicious partner wallet
+        // re-entered redeem() while the ledger decrements below were still
+        // pending — double extraction and honest-depositor impairment
+        // (PoC-proven in SELF_AUDIT_V1.4.0.md). Same guard family as every
+        // other state-mutating entry point on this vault.
         uint256 amount = stuckRevenue[partner];
         if (amount == 0) revert ZeroAmount();
         stuckRevenue[partner] = 0;
