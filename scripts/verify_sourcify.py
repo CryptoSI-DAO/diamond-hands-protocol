@@ -19,20 +19,20 @@ import urllib.request
 import urllib.error
 from pathlib import Path
 
-CHAIN_ID = 84532  # Base Sepolia
+CHAIN_ID = 8453  # Base Mainnet
 SOLC_VERSION = "0.8.28+commit.7893614a"  # foundry build
 
 # (address, contract_identifier, source_path_relative_to_project_root, creation_tx_hash)
 CONTRACTS = [
-    ("0xa69459881ec5fc7393e6a9212cb4232ec96b7d96",
+    ("0x75a7Fee6e8c17F6A7C39136C69A869fe99961D94",
      "src/contracts/DHPImplementation.sol:DHPImplementation",
-     "0xa8022f8efdd251ba5a95181fb98d9004f87de1ea5185f38b355f380340fbb6cb"),
-    ("0x412fa6073e977bdf57dabed1336dc7bd70d6e8c1",
+     "0x2bcfec48fe1f8eec49a14c5bfb5f28a842a3d8c9d1d0242b31ab95d15a6fa458"),
+    ("0x0D48743923D8fcE041325F98B5Ce884a323f5499",
      "src/contracts/DHPFeeCollector.sol:DHPFeeCollector",
-     "0x93b832a3bed4e7bc29973bec7f96d2e1905230d1706db53831d5604f3bff11f3"),
-    ("0x85d6436aabcba27888bc673a7f7cf6be3d2e4b9d",
+     "0xe23de5041d8fb98b5bf19433baea99938fd375223e2bbcfc6b6b457491e96cc2"),
+    ("0x64BE13cE698684846Ae0642c1c63bb5eDE8F6929",
      "src/contracts/DHPFactory.sol:DHPFactory",
-     "0x7c6bb6f7af894b9b6c3460362f8c94cb2cc773a4efa1134f0143f7f7fbf67a19"),
+     "0xcbe933ea581f19177ee0716b986ac9d9ae0d64eb9ebc56b1da16cf63c903f98a"),
 ]
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent

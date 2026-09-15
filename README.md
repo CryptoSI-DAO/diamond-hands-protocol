@@ -8,7 +8,19 @@
 
 ---
 
-## 📍 Live deployments (Base Sepolia testnet) — v1.3.0
+## 📍 Live deployments
+
+### Base Mainnet (8453) — v1.4.0 **CURRENT** · deployed 2026-09-15
+
+| Contract | Address | Deployment | Verification |
+|---|---|---|---|
+| **DHPImplementation** | [`0x75a7Fee6e8c17F6A7C39136C69A869fe99961D94`](https://base.blockscout.com/address/0x75a7fee6e8c17f6a7c39136c69a869fe99961d94) | [tx](https://base.blockscout.com/tx/0x2bcfec48fe1f8eec49a14c5bfb5f28a842a3d8c9d1d0242b31ab95d15a6fa458) · block 51,343,897 | ✅ Blockscout verified |
+| **DHPFeeCollector** | [`0x0D48743923D8fcE041325F98B5Ce884a323f5499`](https://base.blockscout.com/address/0x0d48743923d8fce041325f98b5ce884a323f5499) | [tx](https://base.blockscout.com/tx/0xe23de5041d8fb98b5bf19433baea99938fd375223e2bbcfc6b6b457491e96cc2) · block 51,343,898 | ✅ Blockscout verified |
+| **DHPFactory** | [`0x64BE13cE698684846Ae0642c1c63bb5eDE8F6929`](https://base.blockscout.com/address/0x64be13ce698684846ae0642c1c63bb5ede8f6929) | [tx](https://base.blockscout.com/tx/0xcbe933ea581f19177ee0716b986ac9d9ae0d64eb9ebc56b1da16cf63c903f98a) · block 51,343,899 | ✅ Blockscout verified |
+
+**Deployer:** `0x525aCf49bb68EF5e76D2B40917da0Dc335D14cd0` · **DAO treasury & curator:** `0x0B172a4E265AcF4c2E0aB238F63A44bf29bBd158` · **Creation fee:** 0.004 ETH · CRDD tier dormant (`crddToken = 0x0`)
+
+### Base Sepolia (84532) — v1.3.0 · testnet lineage, 2026-09-12
 
 | Contract | Address | Deployment | Verification |
 |---|---|---|---|
