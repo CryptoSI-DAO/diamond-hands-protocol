@@ -31,9 +31,20 @@
 | **DHPFeeCollector** | `0x0D48743923D8fcE041325F98B5Ce884a323f5499` |
 | **DHPFactory** | `0x64BE13cE698684846Ae0642c1c63bb5eDE8F6929` |
 
-**Deployer:** `0x525aCf49bb68EF5e76D2B40917da0Dc335D14cd0` · **DAO treasury & curator:** `0x0B172a4E265AcF4c2E0aB238F63A44bf29bBd158` · **Creation fee:** 0.004 (native units) · CRDD tier dormant (`crddToken = 0x0`)
+**Deployer:** `0x525aCf49bb68EF5e76D2B40917da0Dc335D14cd0` · **DAO treasury & curator:** `0x0B172a4E265AcF4c2E0aB238F63A44bf29bBd158` · **Creation fee:** 0.004 ETH · CRDD tier dormant (`crddToken = 0x0`)
 
-All deployments ran through `script/DeployDHP.s.sol` — hard chain-id allowlist, per-chain gas-price caps, treasury≠deployer guards, and post-deploy read-backs (`implementation()`, `feeCollector()`, decimals policy, owner) enforced in-script. Base was additionally Blockscout-verified; the 2026-09-22 chains are code+read-back verified on-chain, explorer source-verification pending.
+### 🔑 Governance status (live, verified 2026-09-22)
+
+| Contract | `owner()` on all 5 mainnets | Status |
+|---|---|---|
+| DHPFactory | `0x0000…0000` — **RENOUNCED** (2026-09-22, all chains; txs below) | ✅ Endgame complete — creation fee, decimals policy and curation params are now immutable |
+| DHPFeeCollector | `0x525a…4cd0` (deployer burner) | ⏸ Deliberately **retained** per v1.2.2 audit M-NEW-1: `sweep()` is `onlyOwner`; renouncing would permanently lock all future protocol fees. **Transfer to a DAO Safe first, then renounce** — do NOT renounce before the Safe exists. |
+
+Renounce txs — Base [0xb14e…4d2](https://base.blockscout.com/tx/0xb14ecb1b628c8ab4c47dfe24fa38a68a53947b2d60501f0e37653f7e80a0e4d2) · Ethereum [0x5166…0a43](https://etherscan.io/tx/0x51666ee1c26ca16b82db08eacececf73ed1e53bf6a577fc040cf1050d2d60a43) · BNB [0x0a65…e2a6](https://bscscan.com/tx/0x0a65f25c00913c321c8618538d0bc10473984fed7216f4472870e81923cee2a6) · Robinhood [0xba50…7a5a](https://robinscan.io/tx/0xba50bb3b4f5e89fe96b3f0c43a0044dfb87c586706883028a2ae7563339b7a5a) · Arc [0x1406…9eea](https://explorer.arc.io/tx/0x140668e45f8b3f8f093055465613f59e4f29849ff63c42bcaa78b914f8f199ea)
+
+All deployments ran through `script/DeployDHP.s.sol` — hard chain-id allowlist, per-chain gas-price caps, treasury≠deployer guards, and post-deploy read-backs (`implementation()`, `feeCollector()`, decimals policy, owner) enforced in-script.
+
+**Source verification: Sourcify `exact_match` on all 15 contract/chain pairs** (implementation + fee collector + factory × Ethereum, BNB, Robinhood, Arc mainnet, Arc testnet) — [repository](https://repository.sourcify.dev/protocol/1/0x64BE13cE698684846Ae0642c1c63bb5eDE8F6929). Base additionally Blockscout-verified.
 
 <details>
 <summary>Ethereum (1) — 2026-09-22 · deployment txs</summary>
