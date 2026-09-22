@@ -2,7 +2,7 @@
 
 > *Paper hands fund diamond hands. On-chain. Forever.*
 
-**Current version: v1.4.0-rc** — #27 free-market creation + #28 CRDD minting tier + #29 partner revenue split. 101 permanent tests passing. Live testnet deployments below are v1.3.0; mainnet launch pending the v1.4.0 merge + deploy.
+**Current version: v1.4.0 — LIVE on 5 chains** (Base, Ethereum, BNB, Robinhood Chain, Arc). #27 free-market creation + #28 CRDD minting tier + #29 partner revenue split. 101 permanent tests passing. Full smoke test (vault lifecycle) passed on-chain on Arc.
 
 [📄 **Latest self-audit: `SELF_AUDIT_V1.4.0.md`**](SELF_AUDIT_V1.4.0.md) — 1 Critical found & **FIXED** (claimStuck reentrancy, PoC-verified → regression-pinned) · [🔒 SECURITY.md](SECURITY.md) · [📋 AUDIT_SCOPE.md](AUDIT_SCOPE.md) · [🔗 ERC-4626 compatibility](ERC4626_COMPATIBILITY.md)
 
@@ -10,7 +10,89 @@
 
 ## 📍 Live deployments
 
-### Base Mainnet (8453) — v1.4.0 **CURRENT** · deployed 2026-09-15
+### Multichain — one protocol, five chains (expanded 2026-09-22)
+
+> Identical bytecode + deterministic nonce-0 deploys = **the same contract addresses on every chain.**
+
+| Chain | Chain ID | Status | Deployed | Gas token | Explorer |
+|---|---|---|---|---|---|
+| Base Mainnet | 8453 | 🟢 LIVE | 2026-09-15 | ETH | [Blockscout](https://base.blockscout.com) |
+| Ethereum | 1 | 🟢 LIVE | 2026-09-22 | ETH | [Etherscan](https://etherscan.io) |
+| BNB Smart Chain | 56 | 🟢 LIVE | 2026-09-22 | BNB | [BscScan](https://bscscan.com) |
+| Robinhood Chain (Arbitrum Orbit L2) | 4663 | 🟢 LIVE | 2026-09-22 | ETH | [Robinscan](https://robinscan.io) |
+| Arc Mainnet (Circle, USDC-native) | 5042 | 🟢 LIVE — launch day | 2026-09-22 | **USDC** | [Arc Explorer](https://explorer.arc.io) |
+| Arc Testnet | 5042002 | 🟢 rehearsal · full smoke test passed | 2026-09-22 | USDC | [Arcscan Testnet](https://testnet.arcscan.app) |
+
+**Same on every chain:**
+
+| Contract | Address |
+|---|---|
+| **DHPImplementation** | `0x75a7Fee6e8c17F6A7C39136C69A869fe99961D94` |
+| **DHPFeeCollector** | `0x0D48743923D8fcE041325F98B5Ce884a323f5499` |
+| **DHPFactory** | `0x64BE13cE698684846Ae0642c1c63bb5eDE8F6929` |
+
+**Deployer:** `0x525aCf49bb68EF5e76D2B40917da0Dc335D14cd0` · **DAO treasury & curator:** `0x0B172a4E265AcF4c2E0aB238F63A44bf29bBd158` · **Creation fee:** 0.004 (native units) · CRDD tier dormant (`crddToken = 0x0`)
+
+All deployments ran through `script/DeployDHP.s.sol` — hard chain-id allowlist, per-chain gas-price caps, treasury≠deployer guards, and post-deploy read-backs (`implementation()`, `feeCollector()`, decimals policy, owner) enforced in-script. Base was additionally Blockscout-verified; the 2026-09-22 chains are code+read-back verified on-chain, explorer source-verification pending.
+
+<details>
+<summary>Ethereum (1) — 2026-09-22 · deployment txs</summary>
+
+| Contract | tx | Block |
+|---|---|---|
+| DHPImplementation | [0x9f51…3d0e](https://etherscan.io/tx/0x9f516a9d605b436e5ba6019c44e0fe3772d77b61b9c36ee5d89bca0279ff3d0e) | 26,032,989 |
+| DHPFeeCollector | [0xc2eb…1d58](https://etherscan.io/tx/0xc2eb1c134398de571ce5a276513596c992590b2d6503ca45626bb0fc05ef1d58) | 26,032,990 |
+| DHPFactory | [0x0559…ccb4](https://etherscan.io/tx/0x05590348167bb1334ada3f039ccd3c62a6d9647f867134622717e4b1636cc2b4) | 26,032,991 |
+
+</details>
+
+<details>
+<summary>BNB Smart Chain (56) — 2026-09-22 · deployment txs</summary>
+
+| Contract | tx | Block |
+|---|---|---|
+| DHPImplementation | [0x22e6…99b0](https://bscscan.com/tx/0x22e965a546d3b0fabff1b46f2b3b76a15f2856b560e72927351139058c0a99b0) | 123,371,417 |
+| DHPFeeCollector | [0x3c4d…f447](https://bscscan.com/tx/0x3c4d254daeaf13897cd0ca2e9c1a7fc7e6c9efe55e62349eb9d69ec6a6bb4f47) | 123,371,421 |
+| DHPFactory | [0x5da1…8d23](https://bscscan.com/tx/0x5da1e7056273d5658e8136a67a346f7499da2290bbcc459a404cdec5ac078d23) | 123,371,426 |
+
+</details>
+
+<details>
+<summary>Robinhood Chain (4663) — 2026-09-22 · deployment txs</summary>
+
+| Contract | tx | Block |
+|---|---|---|
+| DHPImplementation | [0x2dda…c9e5](https://robinscan.io/tx/0x2dda4f27858e1f9fefa0ff87e50790bb52990218b5b7ef8733c9932b5285c9e5) | 69,646,575 |
+| DHPFeeCollector | [0xe990…ca36](https://robinscan.io/tx/0xe990c2794ffe71620e135d4e59ea063ebef48749a5621018a8f66154eaabca36) | 69,646,596 |
+| DHPFactory | [0x6e12…9d7f](https://robinscan.io/tx/0x6e120ede1cfcb971279f12f1b9d9e1f940bdb966bcceac0bda3a6f08df909d7f) | 69,646,599 |
+
+</details>
+
+<details>
+<summary>Arc Mainnet (5042) — 2026-09-22 (launch day) · deployment txs</summary>
+
+| Contract | tx | Block |
+|---|---|---|
+| DHPImplementation | [0x5e20…e0cb](https://explorer.arc.io/tx/0x5e2017535b40ab435ecea363922adf0c965f6ffb3f7fe84bfbcd83f601f4e0cb) | 22,191,425 |
+| DHPFeeCollector | [0x06d1…6e77](https://explorer.arc.io/tx/0x06d1eb5ba8269249e3d2d2711f59757f084c8ba45f1e74d385794ae43f26e77d) | 22,191,428 |
+| DHPFactory | [0xa2e9…c235](https://explorer.arc.io/tx/0xa2e9764df9dfcdae324325efa019107ad12664261d31a3548658a236ec1c235a) | 22,191,433 |
+
+</details>
+
+<details>
+<summary>Arc Testnet (5042002) — 2026-09-22 · dress rehearsal, smoke test PASSED on-chain</summary>
+
+Full vault lifecycle proven on the USDC-gas chain: mock token [`0xAcCb…b580`](https://testnet.arcscan.app/address/0xaccbe0b0a1f730f8588f45ed663a9ed3a60db580) → vault [`0xd91b…3A8b`](https://testnet.arcscan.app/address/0xd91ba3f495ee2ef66aebefe46a9731e985753a8b) (`dhsSPX`) → deposit (5% entry tax collected) → dividend accrual (8% share) → claim → redeem.
+
+| Contract | tx |
+|---|---|
+| DHPImplementation | [0x89ad…7497](https://testnet.arcscan.app/tx/0x89addf7d9562536ea3ad22ecb6a5ef0837e919f80e1274dc15517717e0037497) |
+| DHPFeeCollector | [0x7322…9c98](https://testnet.arcscan.app/tx/0x7322c4ed867250067a9964715f31f31b6b0a79a91873d6e2d7cecd7c70559c98) |
+| DHPFactory | [0x08c6…fd1f](https://testnet.arcscan.app/tx/0x08c63f65ee708f42f050bd9b88b11945b975b31f1701d66f270d1dfa513afd1f) |
+
+</details>
+
+### Base Mainnet (8453) — v1.4.0 · 2026-09-15 (first deployment)
 
 | Contract | Address | Deployment | Verification |
 |---|---|---|---|

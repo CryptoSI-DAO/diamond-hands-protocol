@@ -24,6 +24,7 @@ contract DeployDHP is Script {
         allowed[4663] = true;     // Robinhood Chain
         allowed[46630] = true;    // Robinhood Chain Testnet
         allowed[5042002] = true;  // Arc Network Testnet
+        allowed[5042] = true;     // Arc Network Mainnet (USDC-native gas)
     }
 
     function run() external {
@@ -43,6 +44,7 @@ contract DeployDHP is Script {
         if (block.chainid == 1) cap = 200 gwei;
         else if (block.chainid == 56) cap = 10 gwei;
         else if (block.chainid == 5042002) cap = 100 gwei;
+        else if (block.chainid == 5042) cap = 100 gwei; // Arc mainnet (~21 gwei observed)
         else cap = 5 gwei; // Robinhood lanes
         require(block.basefee <= cap, "DHP: gas above chain cap");
 
