@@ -27,12 +27,12 @@
         "explorer": "https://base.blockscout.com/address/0x0d48743923d8fce041325f98b5ce884a323f5499"
       },
       "DHPFactory": {
-        "address": "0x64BE13cE698684846Ae0642c1c63bb5eDE8F6929",
-        "txHash": "0xcbe933ea581f19177ee0716b986ac9d9ae0d64eb9ebc56b1da16cf63c903f98a",
-        "blockNumber": 51343899,
-        "gasUsed": 1235325,
-        "verified": "blockscout:verified",
-        "explorer": "https://base.blockscout.com/address/0x64be13ce698684846ae0642c1c63bb5ede8f6929",
+       "address": "0x64BE13cE698684846Ae0642c1c63bb5eDE8F6929",
+       "txHash": "0xcbe933ea581f19177ee0716b986ac9d9ae0d64eb9ebc56b1da16cf63c903f98a",
+       "blockNumber": 51343899,
+       "gasUsed": 1235325,
+       "verified": "sourcify:match (Base verified 2026-10-05; sourcify:match all 5 chains)",
+       "explorer": "https://base.blockscout.com/address/0x64be13ce698684846ae0642c1c63bb5ede8f6929",
         "implementation": "0x75a7Fee6e8c17F6A7C39136C69A869fe99961D94",
         "feeCollector": "0x0D48743923D8fcE041325F98B5Ce884a323f5499",
         "minAcceptedDecimals": 0,
@@ -56,6 +56,31 @@
       }
     },
     "auditPasses": ["v1.0", "v1.1", "v1.2", "v1.2.1", "v1.2.2", "v1.3.0", "v1.4.0"],
+    "verificationLedger": {
+      "updated": "2026-10-05",
+      "trigger": "Coinbase Wallet/Blockaid 'untrusted contract' false positive on the Base createVault flow — root cause: DHPFactory had no Sourcify record on Base (verified on ETH/BNB/Arc only). Fixed same day.",
+      "sourcify": {
+        "DHPFactory": {
+          "8453": "match (2026-10-05, scripts/verify_sourcify_mainnet.py)",
+          "1": "match (2026-09-22)",
+          "56": "match (2026-09-22)",
+          "4663": "exact_match (creation + runtime)",
+          "5042": "match (2026-09-22)"
+        },
+        "DHPImplementation": "match on all 5 chains",
+        "DHPFeeCollector": "match on all 5 chains"
+      },
+      "blockscout": {
+        "note": "Base instance shows verified records for implementation + feeCollector; factory record pending their Sourcify sync as of 2026-10-05. Recheck: GET /api/v2/smart-contracts/0x64BE13cE698684846Ae0642c1c63bb5eDE8F6929"
+      },
+      "basescan": {
+        "note": "Etherscan-family verification needs a BASESCAN_API_KEY (repo .env.example has the slot, key not provisioned). Pending: create key at basescan.org/myapikey, then forge verify-contract per contract."
+      },
+      "blockaid": {
+        "note": "2026-10-05: Developer verification form at report.blockaid.io (Developer → verify a project) filled completely (domain app.dhp.cryptosidao.org, factory address, evidence, cryptosixxx@gmail.com) but the portal's bot-gate silently blocked submit from the agent session (form valid, no console errors, no navigation). TODO: Carl re-submits from his device — all fields documented here — or emails Blockaid support directly. Fallback ready: same evidence block."
+      },
+      "appUi": "SecurityNotice component shipped to app.dhp.cryptosidao.org (create step 3 + vault deposit) explaining expected wallet warnings + tx-preview checklist."
+    },
     "auditFixes": {
       "v1.4.0": [
         "H-NEW-1: claimStuck() cross-function reentrancy — nonReentrant guard, PoC-proven then regression-pinned",
