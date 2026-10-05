@@ -77,7 +77,7 @@
         "note": "Etherscan-family verification needs a BASESCAN_API_KEY (repo .env.example has the slot, key not provisioned). Pending: create key at basescan.org/myapikey, then forge verify-contract per contract."
       },
       "blockaid": {
-        "note": "2026-10-05: Developer verification form at report.blockaid.io (Developer → verify a project) filled completely (domain app.dhp.cryptosidao.org, factory address, evidence, cryptosixxx@gmail.com) but the portal's bot-gate silently blocked submit from the agent session (form valid, no console errors, no navigation). TODO: Carl re-submits from his device — all fields documented here — or emails Blockaid support directly. Fallback ready: same evidence block."
+        "note": "SUBMITTED 2026-10-05: Carl fired the Developer verification form at report.blockaid.io from his own device (agent sessions are bot-gated); portal confirmed 'Report Sent — we'll review it thoroughly'. Contents: app.dhp.cryptosidao.org, factory 0x64BE…F6929, full evidence block above, updates go to cryptosixxx@gmail.com. Review in progress — if no reply in ~2 weeks, follow up via the same portal with the same evidence."
       },
       "appUi": "SecurityNotice component shipped to app.dhp.cryptosidao.org (create step 3 + vault deposit) explaining expected wallet warnings + tx-preview checklist."
     },
