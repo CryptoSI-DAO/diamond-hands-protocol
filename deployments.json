@@ -71,7 +71,7 @@
         "DHPFeeCollector": "match on all 5 chains"
       },
       "blockscout": {
-        "note": "Base instance shows verified records for implementation + feeCollector; factory record pending their Sourcify sync as of 2026-10-05. Recheck: GET /api/v2/smart-contracts/0x64BE13cE698684846Ae0642c1c63bb5eDE8F6929"
+        "note": "VERIFIED 2026-10-05: base.blockscout.com/api/v2/smart-contracts shows name=DHPFactory verified=true — Sourcify sync landed ~1h after submission. Implementation + FeeCollector were already verified. Lesson: Sourcify verification propagates to Blockscout automatically; blockscout:verified claims in this file should always be re-checked against the live API after deploys."
       },
       "basescan": {
         "note": "Etherscan-family verification needs a BASESCAN_API_KEY (repo .env.example has the slot, key not provisioned). Pending: create key at basescan.org/myapikey, then forge verify-contract per contract."
